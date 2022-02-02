@@ -47,6 +47,11 @@ struct Sphere {
     pub center: Vec3,
     pub radius: f32,
 }
+struct Triangle {
+    pub a: Vec3,
+    pub b: Vec3,
+    pub c: Vec3,
+}
 
 // IMPL
 impl Camera {
@@ -121,6 +126,31 @@ impl Intersectable for Sphere {
         }
     }
 }
+impl Intersectable for Triangle {
+    fn intersect_ray(&self, ray: &Ray) -> Option<RayHit> {
+        // based on 419 slide for ray-triangle intersection
+        const EPSILON : f32 = 0.0001;
+        let e1 = self.b - self.a;
+        let e2 = self.c - self.a;
+        let q = ray.direction.cross(e2);
+        let a = e1.dot(q);
+        if a.abs() < EPSILON { return None; }
+        let f = 1.0/a;
+        let s = ray.origin - self.a;
+        let u = f*s.dot(q);
+        if u < 0.0 { return None; }
+        let r = s.cross(e1);
+        let v = f*ray.direction.dot(r);
+        if v < 0.0 || u+v > 1.0 { return None }
+        let t = f*e2.dot(r);
+        let hitpoint = ray.origin + t*ray.direction;
+        return Some(RayHit {
+            distance: t,
+            hitpoint: hitpoint,
+            normal: e1.cross(e2).normalize(),
+        })
+    }
+}
 impl Intersectable for Scene {
     fn intersect_ray(&self, ray: &Ray) -> Option<RayHit> {
         // for now, just iterate over all intersectables and return shortest (this will probably be a BVH or something later)
@@ -162,6 +192,11 @@ pub fn run() {
             Box::new(Sphere {
                 center: vec3(0.0,0.0,-1.0),
                 radius: 0.6,
+            }),
+            Box::new(Triangle {
+                a: vec3(-0.7, -0.7, -0.5),
+                b: vec3(0.4, 0.2, -0.5),
+                c: vec3(-0.2, 0.2, -0.3),
             })
         ],
     };
