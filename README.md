@@ -8,4 +8,6 @@ Michael Korenchan | Computer Science | Univesity of Illinois
 - **Week 2:**
   - Started something along the lines of 419 MP1
   - Added positional camera and initial ray generation
-  - Currently draws pixel ray directions as colors
+  - Added ray-sphere intersection
+  - Added ray-triangle intersection
+  - Currently shades pixel based on normal of first intersection
