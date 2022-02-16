@@ -1,4 +1,4 @@
-// TRACING - Implements mesh loading, bvh construction (todo), and bvh intersection (todo)
+// MESH - Implements mesh loading, bvh construction (todo), and bvh intersection (todo)
 
 use std::borrow::BorrowMut;
 use tobj::{self, Mesh};
