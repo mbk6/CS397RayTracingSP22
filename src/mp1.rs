@@ -63,6 +63,7 @@ struct Triangle {
 struct Plane {
     pub point: Vec3,
     pub normal: Vec3,
+    pub albedo: Vec3,
 }
 
 // IMPL
@@ -214,24 +215,28 @@ impl Intersectable for Triangle {
         })
     }
 }
-// impl Intersectable for Plane {
-//     fn intersect_ray(&self, ray: &Ray) -> Option<RayHit> {
-//         // ray-plane intersection
-//         let n = -dot(self.point - ray.origin, self.normal).signum() * self.normal;
-//         let d = ray.direction.dot(n);
-//         if d.abs() > 0.0001 { 
-//             return None;
-//         }
-//         else {
-            
-//             return Some(RayHit {
-//             distance: t,
-//             hitpoint: hitpoint,
-//             normal: e1.cross(e2).normalize(),
-//             albedo: self.albedo,
-//         })
-//     }
-// }
+impl Intersectable for Plane {
+    fn intersect_ray(&self, ray: &Ray) -> Option<RayHit> {
+        // ray-plane intersection
+        let to_ray_origin = ray.origin - self.point;
+        let origin_dist = dot(to_ray_origin, self.normal);
+        let n = origin_dist.signum() * self.normal;
+        let d = ray.direction.dot(n);
+        if d >= 0.0 { 
+            return None;
+        }
+        else {
+            let t = origin_dist.abs() / d.abs();
+            let hitpoint = ray.origin + t*ray.direction;
+            return Some(RayHit {
+                distance: t,
+                hitpoint: hitpoint,
+                normal: n,
+                albedo: self.albedo,
+            })
+        }
+    }
+}
 impl Intersectable for Scene {
     fn intersect_ray(&self, ray: &Ray) -> Option<RayHit> {
         // for now, just iterate over all intersectables and return shortest (this will probably be a BVH or something later)
@@ -277,10 +282,9 @@ pub fn run() {
                 radius: 0.6,
                 albedo: vec3(0.6,0.3,0.3),
             }),
-            Box::new(Triangle {
-                a: vec3(0.0, -2.0, 0.0),
-                b: vec3(50.0, -2.0, -30.0),
-                c: vec3(-50.0, -2.0, -30.0),
+            Box::new(Plane {
+                point: vec3(0.0, -2.0, 0.0),
+                normal: -Vec3::unit_y(),
                 albedo: vec3(0.3,0.6,0.3),
             }),
             Box::new(Triangle {
