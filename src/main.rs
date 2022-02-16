@@ -1,6 +1,5 @@
-mod mp1;
-mod mesh;
+mod util;
 
 fn main() {
-    mesh::run();
+    util::tracing::run();
 }

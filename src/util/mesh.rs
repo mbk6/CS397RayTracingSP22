@@ -1,7 +1,46 @@
-use std::borrow::BorrowMut;
+// TRACING - Implements mesh loading, bvh construction (todo), and bvh intersection (todo)
 
+use std::borrow::BorrowMut;
 use tobj::{self, Mesh};
 use cgmath::*;
+use std::mem;
+
+use super::tracing;
+
+type Vec3 = Vector3<f32>;
+
+pub struct AABB {
+    pub min: Vec3,
+    pub max: Vec3,
+}
+impl tracing::Intersectable for AABB {
+    // this doesn't actually use the RayHit struct, so for now it just returns Some default or None
+    fn intersect_ray(&self, ray: &tracing::Ray, t_min: f32, t_max: f32) -> Option<tracing::RayHit> {
+        // based on raytracing the next week
+        let mut tmin = t_min.clone();
+        let mut tmax = t_max.clone();
+        for axis in 0..3 {
+            let inv_d = 1.0 / ray.direction[axis];
+            let mut t0 = (self.min[axis] - ray.origin[axis]) * inv_d;
+            let mut t1 = (self.max[axis] - ray.origin[axis]) * inv_d;
+            if inv_d < 0.0 {
+                mem::swap(&mut t0, &mut t1);
+            }
+            tmin = f32::max(t0, tmin);
+            tmax = f32::min(t1, tmax);
+            if tmax <= tmin {
+                return None;
+            }
+        }
+        return Some(tracing::RayHit {
+            distance: 0.0,
+            hitpoint: Vec3::zero(),
+            normal: Vec3::zero(),
+            albedo: Vec3::zero(),
+        })
+    }
+}
+
 
 fn compute_normals(mesh: &mut Mesh) {
     assert!(mesh.normals.is_empty());

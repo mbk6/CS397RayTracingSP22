@@ -14,12 +14,12 @@ type Vec3 = Vector3<f32>;
 type Color = Vec3;
 
 // TRAITS
-trait Intersectable {
-    fn intersect_ray(&self, ray: &Ray) -> Option<RayHit>;
+pub trait Intersectable {
+    fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit>;
 }
 
 // STRUCTS & ENUMS
-struct Camera {
+pub struct Camera {
     // camera model based on 419 lectures
     pub eyepoint: Vec3,
     pub view_dir: Vec3,
@@ -30,39 +30,40 @@ struct Camera {
     pub screen_width: u32,
     pub screen_height: u32,
     pub aa_sample_count: u32, // Must be a perfect square
+    pub max_trace_dist: f32,
 }
 pub enum CameraProjectionMode {
     Orthographic,
     Perspective,
 }
-struct Ray {
+pub struct Ray {
     pub origin: Vec3,
     pub direction: Vec3,
 }
-struct RayHit {
+pub struct RayHit {
     pub distance: f32,
     pub hitpoint: Vec3,
     pub normal: Vec3,
     pub albedo: Vec3,
 }
-struct Scene {
+pub struct Scene {
     pub camera: Camera,
     pub objects: Vec<Box<dyn Intersectable>>,
     pub point_light_pos: Vec3,
     pub ambient: Vec3,
 }
-struct Sphere {
+pub struct Sphere {
     pub center: Vec3,
     pub radius: f32,
     pub albedo: Vec3,
 }
-struct Triangle {
+pub struct Triangle {
     pub a: Vec3,
     pub b: Vec3,
     pub c: Vec3,
     pub albedo: Vec3,
 }
-struct Plane {
+pub struct Plane {
     pub point: Vec3,
     pub normal: Vec3,
     pub albedo: Vec3,
@@ -129,7 +130,7 @@ impl Scene {
                 let cam_rays = self.camera.generate_rays(x, y);
                 let mut final_color = Vec3::zero();
                 for sample_idx in 0..cam_rays.len() {
-                    final_color += match self.intersect_ray(&cam_rays[sample_idx]) {
+                    final_color += match self.intersect_ray(&cam_rays[sample_idx], 0.0, self.camera.max_trace_dist) {
                         None => Vec3::zero(),
                         Some(hit) => {
                             
@@ -159,7 +160,7 @@ impl Scene {
         let specular_weight = dot(to_camera, reflected).clamp(0.0, 1.0).powf(40.0);
         // cast shadow ray
         let shadow_ray = Ray { origin: hit.hitpoint + 0.01*hit.normal, direction: to_light };
-        let shadow_weight = match self.intersect_ray(&shadow_ray) {
+        let shadow_weight = match self.intersect_ray(&shadow_ray, 0.0, (self.point_light_pos - hit.hitpoint).magnitude()) {
             None => 1.0,
             Some(hit) => if hit.distance*hit.distance > (self.point_light_pos - hit.hitpoint).magnitude2() { 1.0 } else { 0.3 }
         };
@@ -167,7 +168,7 @@ impl Scene {
     }
 }
 impl Intersectable for Sphere {
-    fn intersect_ray(&self, ray: &Ray) -> Option<RayHit> {
+    fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
         // ray-sphere intersection
         let f = ray.origin - self.center;
         let a = ray.direction.magnitude2();
@@ -180,7 +181,7 @@ impl Intersectable for Sphere {
         else {
             let t = (-b - d.sqrt()) / (2.0*a);
             let hitpoint = ray.origin + t*ray.direction;
-            if t < 0.0 { return None; }
+            if t < t_min || t > t_max { return None }
             return Some(RayHit {
                 distance: t,
                 hitpoint: hitpoint,
@@ -191,7 +192,7 @@ impl Intersectable for Sphere {
     }
 }
 impl Intersectable for Triangle {
-    fn intersect_ray(&self, ray: &Ray) -> Option<RayHit> {
+    fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
         // ray-triangle intersection
         const EPSILON : f32 = 0.0001;
         let e1 = self.b - self.a;
@@ -208,7 +209,7 @@ impl Intersectable for Triangle {
         if v < 0.0 || u+v > 1.0 { return None }
         let t = f*e2.dot(r);
         let hitpoint = ray.origin + t*ray.direction;
-        if t < 0.0 { return None; }
+        if t < t_min || t > t_max { return None }
         return Some(RayHit {
             distance: t,
             hitpoint: hitpoint,
@@ -218,7 +219,7 @@ impl Intersectable for Triangle {
     }
 }
 impl Intersectable for Plane {
-    fn intersect_ray(&self, ray: &Ray) -> Option<RayHit> {
+    fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
         // ray-plane intersection
         let to_ray_origin = ray.origin - self.point;
         let origin_dist = dot(to_ray_origin, self.normal);
@@ -229,6 +230,7 @@ impl Intersectable for Plane {
         }
         else {
             let t = origin_dist.abs() / d.abs();
+            if t < t_min || t > t_max { return None }
             let hitpoint = ray.origin + t*ray.direction;
             return Some(RayHit {
                 distance: t,
@@ -240,11 +242,11 @@ impl Intersectable for Plane {
     }
 }
 impl Intersectable for Scene {
-    fn intersect_ray(&self, ray: &Ray) -> Option<RayHit> {
+    fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
         // for now, just iterate over all intersectables and return shortest (this will probably be a BVH or something later)
         let mut best_hit = None;
         for object in self.objects.iter() {
-            if let Some(hit) = object.intersect_ray(ray) {
+            if let Some(hit) = object.intersect_ray(ray, t_min, t_max) {
                 best_hit = match best_hit {
                     None => Some(hit),
                     Some(current_best) => {
@@ -277,6 +279,7 @@ pub fn run() {
             screen_width: 400,
             screen_height: 400,
             aa_sample_count: 9,
+            max_trace_dist: 100000.0,
         },
         objects: vec![
             Box::new(Sphere {
