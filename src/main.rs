@@ -1,5 +1,6 @@
 mod mp1;
+mod mesh;
 
 fn main() {
-    mp1::run();
+    mesh::run();
 }

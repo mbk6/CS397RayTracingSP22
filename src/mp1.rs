@@ -1,5 +1,7 @@
 // MP1 - based on CS 419 mp1
 
+#![allow(dead_code)]
+
 
 // includes
 use std::{ops::Neg, iter::Scan};
