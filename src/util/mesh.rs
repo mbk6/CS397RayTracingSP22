@@ -5,13 +5,31 @@ use tobj::{self, Mesh};
 use cgmath::*;
 use std::mem;
 
-use super::tracing;
+use super::tracing::{self, Intersectable};
 
 type Vec3 = Vector3<f32>;
 
+#[derive(Debug, Clone, Copy)]
 pub struct AABB {
     pub min: Vec3,
     pub max: Vec3,
+}
+impl AABB {
+    // returns the bounding box surrounding two given bounding boxes
+    fn aabb_surrounding(a: &AABB, b: &AABB) -> AABB {
+        AABB {
+            min: vec3(
+                f32::min(a.min.x, b.min.x),
+                f32::min(a.min.y, b.min.y),
+                f32::min(a.min.z, b.min.z),
+            ),
+            max: vec3(
+                f32::max(a.max.x, b.max.x),
+                f32::max(a.max.y, b.max.y),
+                f32::max(a.max.z, b.max.z),
+            ),
+        }
+    }
 }
 impl tracing::Intersectable for AABB {
     // this doesn't actually use the RayHit struct, so for now it just returns Some default or None
@@ -38,6 +56,48 @@ impl tracing::Intersectable for AABB {
             normal: Vec3::zero(),
             albedo: Vec3::zero(),
         })
+    }
+    fn bounding_box(&self) -> Option<AABB> {
+        Some(self.clone())
+    }
+}
+
+// trees are apparently difficult to use in rust.
+// i'll use the method suggested here: https://dev.to/deciduously/no-more-tears-no-more-knots-arena-allocated-trees-in-rust-44k6#:~:text=One%20such%20category%20is%20tree,Rust%20hates%20that.
+pub struct BVHNode {
+    pub idx: usize,
+    pub parent: Option<usize>,
+    pub aabb: AABB,
+    pub left: Option<Box<BVHNode>>,
+    pub right: Option<Box<BVHNode>>,
+    pub primitive: Option<Box<dyn Intersectable>>,
+}
+impl tracing::Intersectable for BVHNode {
+    fn intersect_ray(&self, ray: &tracing::Ray, t_min: f32, t_max: f32) -> Option<tracing::RayHit> {
+        if let Some(prim) = &self.primitive {
+            // node is a leaf
+            prim.intersect_ray(ray, t_min, t_max)
+        }
+        else {
+            // node is interior - check if ray intersects aabb
+            if self.aabb.intersect_ray(ray, t_min, t_max).is_some() {
+                // recurse to children
+                if let Some(left_node) = &self.left {
+                    let hit = left_node.intersect_ray(ray, t_min, t_max);
+                    if hit.is_some() { return hit }
+                }
+                if let Some(right_node) = &self.right {
+                    let hit = right_node.intersect_ray(ray, t_min, t_max);
+                    if hit.is_some() { return hit }
+                }
+            }
+            // ray misses this node entirely
+            None
+            
+        }
+    }
+    fn bounding_box(&self) -> Option<AABB> {
+        Some(self.aabb.clone())
     }
 }
 

@@ -1,4 +1,4 @@
-// MP1 - based on CS 419 mp1
+// TRACING - Implements a scene, camera, ray, and other tracing utilities
 
 #![allow(dead_code)]
 
@@ -9,13 +9,18 @@ use image::*;
 use cgmath::*;
 use rand::Rng;
 
+use super::mesh::AABB;
+
 // constants & typedefs
 type Vec3 = Vector3<f32>;
 type Color = Vec3;
 
 // TRAITS
 pub trait Intersectable {
+    // tests for intersection with a given ray and returns hit info
     fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit>;
+    // returns the axis-aligned bounding box of the intersectable, if there is one
+    fn bounding_box(&self) -> Option<AABB>; // Option because not all primitives have bounding boxes (e.g. plane)
 }
 
 // STRUCTS & ENUMS
@@ -190,6 +195,12 @@ impl Intersectable for Sphere {
             })
         }
     }
+    fn bounding_box(&self) -> Option<AABB> {
+        Some(AABB {
+            min: self.center - vec3(self.radius,self.radius,self.radius),
+            max: self.center + vec3(self.radius,self.radius,self.radius),
+        })
+    }
 }
 impl Intersectable for Triangle {
     fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
@@ -217,6 +228,20 @@ impl Intersectable for Triangle {
             albedo: self.albedo,
         })
     }
+    fn bounding_box(&self) -> Option<AABB> {
+        Some(AABB {
+            min: vec3(
+                f32::min(self.a.x,f32::min(self.b.x, self.c.x)),
+                f32::min(self.a.y,f32::min(self.b.y, self.c.y)),
+                f32::min(self.a.z,f32::min(self.b.z, self.c.z))
+            ),
+            max: vec3(
+                f32::max(self.a.x,f32::max(self.b.x, self.c.x)),
+                f32::max(self.a.y,f32::max(self.b.y, self.c.y)),
+                f32::max(self.a.z,f32::max(self.b.z, self.c.z))
+            ),
+        })
+    }
 }
 impl Intersectable for Plane {
     fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
@@ -240,6 +265,9 @@ impl Intersectable for Plane {
             })
         }
     }
+    fn bounding_box(&self) -> Option<AABB> {
+        None
+    }
 }
 impl Intersectable for Scene {
     fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
@@ -261,6 +289,9 @@ impl Intersectable for Scene {
             }
         }
         return best_hit;
+    }
+    fn bounding_box(&self) -> Option<AABB> {
+        None
     }
 }
 
