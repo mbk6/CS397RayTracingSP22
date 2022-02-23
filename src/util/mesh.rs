@@ -4,8 +4,9 @@ use std::borrow::BorrowMut;
 use tobj::{self, Mesh};
 use cgmath::*;
 use std::mem;
+use rand::Rng;
 
-use super::tracing::{self, Intersectable};
+use super::tracing::{self, Intersectable, Triangle};
 
 type Vec3 = Vector3<f32>;
 
@@ -28,6 +29,13 @@ impl AABB {
                 f32::max(a.max.y, b.max.y),
                 f32::max(a.max.z, b.max.z),
             ),
+        }
+    }
+}
+impl Default for AABB {
+    fn default() -> AABB {
+        AABB {
+           min: Vec3::zero(), max: Vec3::zero(),
         }
     }
 }
@@ -62,15 +70,62 @@ impl tracing::Intersectable for AABB {
     }
 }
 
-// trees are apparently difficult to use in rust.
-// i'll use the method suggested here: https://dev.to/deciduously/no-more-tears-no-more-knots-arena-allocated-trees-in-rust-44k6#:~:text=One%20such%20category%20is%20tree,Rust%20hates%20that.
+#[derive(Default)]
 pub struct BVHNode {
-    pub idx: usize,
-    pub parent: Option<usize>,
     pub aabb: AABB,
     pub left: Option<Box<BVHNode>>,
     pub right: Option<Box<BVHNode>>,
     pub primitive: Option<Box<dyn Intersectable>>,
+}
+impl BVHNode {
+    pub fn build_from_mesh(mesh: &Mesh) -> Box<BVHNode> {
+        print!("Building BVH...");
+        let mut objects = Vec::new();
+        // populate array of total objects (inefficient for now)
+        // aka: iterate over triangles
+        for i in (0..mesh.indices.len()).step_by(3) {
+            // load vertices
+            let (x,y,z) = (mesh.indices[i] as usize, mesh.indices[i+1] as usize, mesh.indices[i+2] as usize);
+            let a = vec3(mesh.positions[x*3], mesh.positions[x*3+1], mesh.positions[x*3+2]);
+            let b = vec3(mesh.positions[y*3], mesh.positions[y*3+1], mesh.positions[y*3+2]);
+            let c = vec3(mesh.positions[z*3], mesh.positions[z*3+1], mesh.positions[z*3+2]);
+           // create triangle
+           objects.push(tracing::Triangle {a: a, b: b, c: c, albedo: vec3(0.5,0.5,0.5)});
+        }
+        let start: usize = 0;
+        let end = objects.len();
+        let node = BVHNode::build_from_mesh_helper(&mut objects, start, end);        
+        println!("Done.");
+        return node;
+    }
+    fn build_from_mesh_helper(objects: &mut Vec<tracing::Triangle>, start: usize, end: usize) -> Box<BVHNode> {
+        let mut node = BVHNode::default();
+        if end-start == 1 {
+            // make the node a leaf
+            node.primitive = Some(Box::new(objects[start].clone()));
+            node.aabb = objects[start].bounding_box().unwrap_or_default();
+        }
+        else {
+            // sort segment by random axis
+            let mut rng = rand::thread_rng();
+            let axis: usize = rng.gen_range(0..3);
+            let comparator = |a: &Triangle, b: &Triangle| {
+                let f = a.bounding_box().unwrap_or_default().min[axis];
+                let g = b.bounding_box().unwrap_or_default().min[axis];
+                f.partial_cmp(&g).unwrap_or(std::cmp::Ordering::Equal)
+            };
+            objects[start..end].sort_by(comparator);
+            // recurse on each side
+            let mid = start + (end-start)/2;
+            let left  = Self::build_from_mesh_helper(objects, start, mid);
+            let right = Self::build_from_mesh_helper(objects, mid, end);
+            node.aabb = AABB::aabb_surrounding(&left.aabb, &right.aabb);
+            node.left = Some(left);
+            node.right = Some(right);
+        }
+        Box::new(node)
+    }
+
 }
 impl tracing::Intersectable for BVHNode {
     fn intersect_ray(&self, ray: &tracing::Ray, t_min: f32, t_max: f32) -> Option<tracing::RayHit> {
@@ -130,7 +185,7 @@ fn compute_normals(mesh: &mut Mesh) {
 }
 
 
-pub fn run() {
+pub fn get_mesh() -> Mesh {
     // load obj
     let obj = tobj::load_obj(
         "./obj/teapot.obj",
@@ -148,12 +203,11 @@ pub fn run() {
     println!("# of models: {}", models.len());
     println!("# of materials: {}", materials.len());
     
-    // compute normals if not present
     let teapot = (models[0].mesh).borrow_mut();
-    if teapot.normals.is_empty() {
-        compute_normals(teapot);
-    }
-    assert!(!teapot.normals.is_empty());
-
-    
+    // // compute normals if not present
+    // if teapot.normals.is_empty() {
+    //     compute_normals(teapot);
+    // }
+    // assert!(!teapot.normals.is_empty());
+    teapot.clone()
 }

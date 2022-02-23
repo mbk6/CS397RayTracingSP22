@@ -9,7 +9,7 @@ use image::*;
 use cgmath::*;
 use rand::Rng;
 
-use super::mesh::AABB;
+use super::mesh::{AABB, get_mesh};
 
 // constants & typedefs
 type Vec3 = Vector3<f32>;
@@ -62,6 +62,7 @@ pub struct Sphere {
     pub radius: f32,
     pub albedo: Vec3,
 }
+#[derive(Debug, Clone, Copy)]
 pub struct Triangle {
     pub a: Vec3,
     pub b: Vec3,
@@ -127,6 +128,7 @@ impl Camera {
 }
 impl Scene {
     pub fn render_to_image(&self) -> DynamicImage {
+        print!("Rendering...");
         // create image and iterate through its pixels
         let mut img = DynamicImage::new_rgb8(self.camera.screen_width, self.camera.screen_height);
         for x in 0..self.camera.screen_width {
@@ -154,6 +156,7 @@ impl Scene {
                 img.put_pixel(x, y, color_rgb);
             }
         }
+        println!("Done.");
         return img;
     }
     fn phong_shade_hit(&self, hit: &RayHit) -> Color {
@@ -301,7 +304,7 @@ pub fn run() {
     // initialize scene
     let scene = Scene {
         camera: Camera {
-            eyepoint: Vec3::zero(),
+            eyepoint: vec3(0.0, 2.0, 5.0),
             view_dir: -Vec3::unit_z(),
             up: Vec3::unit_y(),
             view_plane_dist: 0.2,
@@ -329,6 +332,7 @@ pub fn run() {
                 c: vec3(-1.0, 0.5, -2.0),
                 albedo: vec3(0.3,0.3,0.6),
             }),
+            super::mesh::BVHNode::build_from_mesh(&get_mesh())
         ],
         point_light_pos: vec3(-1.0,5.0,5.0),
         ambient: vec3(0.1,0.1,0.1),

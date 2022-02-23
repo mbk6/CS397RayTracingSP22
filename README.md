@@ -22,3 +22,8 @@ Michael Korenchan | Computer Science | Univesity of Illinois
   - Imported obj parser
   - Implemented obj normal generation
   - Implemented basic AABB ray intersection test
+- **Week of Feb 21:**
+  - Defined BVH structure
+  - Implemented BVH intersection test
+  - Implemented (inefficient) BVH construction
+  - Now drawing buggy picture of teapot
