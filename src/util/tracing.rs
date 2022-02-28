@@ -8,6 +8,7 @@ use std::{ops::Neg, iter::Scan};
 use image::*;
 use cgmath::*;
 use rand::Rng;
+use indicatif::ProgressBar;
 
 use super::mesh::{AABB, get_mesh};
 
@@ -45,6 +46,7 @@ pub struct Ray {
     pub origin: Vec3,
     pub direction: Vec3,
 }
+#[derive(Debug, Clone, Copy)]
 pub struct RayHit {
     pub distance: f32,
     pub hitpoint: Vec3,
@@ -128,7 +130,8 @@ impl Camera {
 }
 impl Scene {
     pub fn render_to_image(&self) -> DynamicImage {
-        print!("Rendering...");
+        println!("Rendering...");
+        let progress_bar = ProgressBar::new((self.camera.screen_width*self.camera.screen_height) as u64);
         // create image and iterate through its pixels
         let mut img = DynamicImage::new_rgb8(self.camera.screen_width, self.camera.screen_height);
         for x in 0..self.camera.screen_width {
@@ -154,8 +157,10 @@ impl Scene {
                     (final_color.z as f32 * 255.9999) as u8,
                     0);
                 img.put_pixel(x, y, color_rgb);
+                progress_bar.inc(1);
             }
         }
+        progress_bar.finish();
         println!("Done.");
         return img;
     }
@@ -304,14 +309,14 @@ pub fn run() {
     // initialize scene
     let scene = Scene {
         camera: Camera {
-            eyepoint: vec3(0.0, 2.0, 5.0),
+            eyepoint: vec3(0.0, 2.0, 4.0),
             view_dir: -Vec3::unit_z(),
             up: Vec3::unit_y(),
             view_plane_dist: 0.2,
-            pixel_size: 0.001,
+            pixel_size: 0.002,
             projection_mode: CameraProjectionMode::Perspective,
-            screen_width: 400,
-            screen_height: 400,
+            screen_width: 200,
+            screen_height: 200,
             aa_sample_count: 9,
             max_trace_dist: 100000.0,
         },

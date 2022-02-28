@@ -75,7 +75,8 @@ pub struct BVHNode {
     pub aabb: AABB,
     pub left: Option<Box<BVHNode>>,
     pub right: Option<Box<BVHNode>>,
-    pub primitive: Option<Box<dyn Intersectable>>,
+    // pub primitive: Option<Box<dyn Intersectable>>,
+    pub primitive: Option<Box<tracing::Triangle>>,
 }
 impl BVHNode {
     pub fn build_from_mesh(mesh: &Mesh) -> Box<BVHNode> {
@@ -135,20 +136,24 @@ impl tracing::Intersectable for BVHNode {
         }
         else {
             // node is interior - check if ray intersects aabb
+            let mut best_hit = None;
+            let mut best_t = t_max.clone();
             if self.aabb.intersect_ray(ray, t_min, t_max).is_some() {
                 // recurse to children
                 if let Some(left_node) = &self.left {
-                    let hit = left_node.intersect_ray(ray, t_min, t_max);
-                    if hit.is_some() { return hit }
+                    let hit_opt = left_node.intersect_ray(ray, t_min, t_max);
+                    if let Some(hit) = hit_opt { 
+                        best_hit = hit_opt;
+                        best_t = hit.distance;
+                    }
                 }
                 if let Some(right_node) = &self.right {
-                    let hit = right_node.intersect_ray(ray, t_min, t_max);
-                    if hit.is_some() { return hit }
+                    let hit_opt = right_node.intersect_ray(ray, t_min, best_t);
+                    if hit_opt.is_some() { best_hit = hit_opt; }
                 }
             }
             // ray misses this node entirely
-            None
-            
+            best_hit
         }
     }
     fn bounding_box(&self) -> Option<AABB> {
