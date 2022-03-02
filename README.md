@@ -27,3 +27,6 @@ Michael Korenchan | Computer Science | Univesity of Illinois
   - Implemented BVH intersection test
   - Implemented (inefficient) BVH construction
   - Now drawing buggy picture of teapot
+- **Week of Feb 28:**
+  - Fixed BVH bug
+  - Added simple multithreading (still needs optimization)
