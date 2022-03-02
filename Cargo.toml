@@ -7,7 +7,9 @@ edition = "2021"
 
 [dependencies]
 cgmath = "0.18.0"
+crossbeam = "0.8.1"
 image = "0.23.14"
 indicatif = "0.16.2"
 rand = "0.8.4"
+rayon = "1.5.1"
 tobj = "3.2.0"

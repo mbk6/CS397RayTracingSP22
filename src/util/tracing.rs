@@ -9,6 +9,10 @@ use image::*;
 use cgmath::*;
 use rand::Rng;
 use indicatif::ProgressBar;
+use std::sync::mpsc;
+use std::sync::Arc;
+use crossbeam::thread;
+use rayon::prelude::*;
 
 use super::mesh::{AABB, get_mesh};
 
@@ -25,6 +29,7 @@ pub trait Intersectable {
 }
 
 // STRUCTS & ENUMS
+#[derive(Debug, Clone)]
 pub struct Camera {
     // camera model based on 419 lectures
     pub eyepoint: Vec3,
@@ -38,6 +43,7 @@ pub struct Camera {
     pub aa_sample_count: u32, // Must be a perfect square
     pub max_trace_dist: f32,
 }
+#[derive(Debug, Clone, Copy)]
 pub enum CameraProjectionMode {
     Orthographic,
     Perspective,
@@ -55,7 +61,7 @@ pub struct RayHit {
 }
 pub struct Scene {
     pub camera: Camera,
-    pub objects: Vec<Box<dyn Intersectable>>,
+    pub objects: Arc<Vec<Box<dyn Intersectable + Send + Sync>>>,
     pub point_light_pos: Vec3,
     pub ambient: Vec3,
 }
@@ -132,33 +138,44 @@ impl Scene {
     pub fn render_to_image(&self) -> DynamicImage {
         println!("Rendering...");
         let progress_bar = ProgressBar::new((self.camera.screen_width*self.camera.screen_height) as u64);
-        // create image and iterate through its pixels
+        // create image and thread channel
         let mut img = DynamicImage::new_rgb8(self.camera.screen_width, self.camera.screen_height);
+        let (tx, rx) = mpsc::channel();
+        // iterate through pixels...
         for x in 0..self.camera.screen_width {
-            for y in 0..self.camera.screen_height {
-                // get rays, trace, and take average of outputs for AA
-                let cam_rays = self.camera.generate_rays(x, y);
-                let mut final_color = Vec3::zero();
-                for sample_idx in 0..cam_rays.len() {
-                    final_color += match self.intersect_ray(&cam_rays[sample_idx], 0.0, self.camera.max_trace_dist) {
-                        None => Vec3::zero(),
-                        Some(hit) => {
-                            
-                            self.phong_shade_hit(&hit)
-                        }
-                    };
+            let tx_clone = tx.clone(); // each thread gets its own copy of the transmitter
+            // launch scoped thread
+            thread::scope( |_s| {
+                for y in 0..self.camera.screen_height {
+                    // get rays, trace, and take average of outputs for AA
+                    let cam_rays = self.camera.generate_rays(x, y);
+                    let mut final_color = Vec3::zero();
+                    for sample_idx in 0..cam_rays.len() {
+                        final_color += match self.intersect_ray(&cam_rays[sample_idx], 0.0, self.camera.max_trace_dist) {
+                            None => Vec3::zero(),
+                            Some(hit) => {
+                                
+                                self.phong_shade_hit(&hit)
+                            }
+                        };
+                    }
+                    final_color /= cam_rays.len() as f32;
+                    
+                    // convert color to u8 and send to main thread
+                    let color_rgb = Rgba::from_channels(
+                        (final_color.x as f32 * 255.9999) as u8,
+                        (final_color.y as f32 * 255.9999) as u8,
+                        (final_color.z as f32 * 255.9999) as u8,
+                        0);
+                        tx_clone.send((x,y,color_rgb)).unwrap();
                 }
-                final_color /= cam_rays.len() as f32;
-                
-                // convert color to u8 and write to image
-                let color_rgb = Rgba::from_channels(
-                    (final_color.x as f32 * 255.9999) as u8,
-                    (final_color.y as f32 * 255.9999) as u8,
-                    (final_color.z as f32 * 255.9999) as u8,
-                    0);
-                img.put_pixel(x, y, color_rgb);
-                progress_bar.inc(1);
-            }
+            }).unwrap();
+        }
+        drop(tx); // ensures all transmitters are dropped
+        // listen to receiver and write to image
+        for (x,y, color_rgb) in rx {
+            img.put_pixel(x, y, color_rgb);
+            progress_bar.inc(1);
         }
         progress_bar.finish();
         println!("Done.");
@@ -320,25 +337,25 @@ pub fn run() {
             aa_sample_count: 9,
             max_trace_dist: 100000.0,
         },
-        objects: vec![
-            Box::new(Sphere {
-                center: vec3(0.5,0.0,-2.0),
-                radius: 0.6,
-                albedo: vec3(0.6,0.3,0.3),
-            }),
+        objects: Arc::new(vec![
+            // Box::new(Sphere {
+            //     center: vec3(0.5,0.0,-2.0),
+            //     radius: 0.6,
+            //     albedo: vec3(0.6,0.3,0.3),
+            // }),
             Box::new(Plane {
                 point: vec3(0.0, -2.0, 0.0),
                 normal: -Vec3::unit_y(),
                 albedo: vec3(0.3,0.6,0.3),
             }),
-            Box::new(Triangle {
-                a: vec3(-1.4, -0.5, -2.0),
-                b: vec3(-0.7, -0.6, -2.0),
-                c: vec3(-1.0, 0.5, -2.0),
-                albedo: vec3(0.3,0.3,0.6),
-            }),
+            // Box::new(Triangle {
+            //     a: vec3(-1.4, -0.5, -2.0),
+            //     b: vec3(-0.7, -0.6, -2.0),
+            //     c: vec3(-1.0, 0.5, -2.0),
+            //     albedo: vec3(0.3,0.3,0.6),
+            // }),
             super::mesh::BVHNode::build_from_mesh(&get_mesh())
-        ],
+        ]),
         point_light_pos: vec3(-1.0,5.0,5.0),
         ambient: vec3(0.1,0.1,0.1),
     };
