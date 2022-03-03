@@ -13,8 +13,8 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use crossbeam::thread;
 use rayon::prelude::*;
-
-use super::mesh::{AABB, get_mesh};
+use super::mesh::StaticMesh;
+use super::mesh::{AABB};
 
 // constants & typedefs
 type Vec3 = Vector3<f32>;
@@ -61,7 +61,7 @@ pub struct RayHit {
 }
 pub struct Scene {
     pub camera: Camera,
-    pub objects: Arc<Vec<Box<dyn Intersectable + Send + Sync>>>,
+    pub objects: Arc<Vec<Arc<dyn Intersectable + Send + Sync>>>,
     pub point_light_pos: Vec3,
     pub ambient: Vec3,
 }
@@ -338,12 +338,9 @@ pub fn run() {
             max_trace_dist: 100000.0,
         },
         objects: Arc::new(vec![
-            // Box::new(Sphere {
-            //     center: vec3(0.5,0.0,-2.0),
-            //     radius: 0.6,
-            //     albedo: vec3(0.6,0.3,0.3),
-            // }),
-            Box::new(Plane {
+
+            Arc::new(StaticMesh::load_from_file("./obj/teapot.obj")),
+            Arc::new(Plane {
                 point: vec3(0.0, -2.0, 0.0),
                 normal: -Vec3::unit_y(),
                 albedo: vec3(0.3,0.6,0.3),
@@ -354,7 +351,12 @@ pub fn run() {
             //     c: vec3(-1.0, 0.5, -2.0),
             //     albedo: vec3(0.3,0.3,0.6),
             // }),
-            super::mesh::BVHNode::build_from_mesh(&get_mesh())
+            //super::mesh::BVHNode::build_from_mesh(&StaticMesh::load_from_file("./obj/teapot.obj"))
+            // Box::new(Sphere {
+            //     center: vec3(0.5,0.0,-2.0),
+            //     radius: 0.6,
+            //     albedo: vec3(0.6,0.3,0.3),
+            // }),
         ]),
         point_light_pos: vec3(-1.0,5.0,5.0),
         ambient: vec3(0.1,0.1,0.1),

@@ -29,4 +29,6 @@ Michael Korenchan | Computer Science | Univesity of Illinois
   - Now drawing buggy picture of teapot
 - **Week of Feb 28:**
   - Fixed BVH bug
+  - Added progress bar for sanity while waiting to render
   - Added simple multithreading (still needs optimization)
+  - Adjusted mesh memory model (still very much a work in progress)
