@@ -2,7 +2,7 @@
 Michael Korenchan | Computer Science | Univesity of Illinois
 
 ## Current Render:
- <img src = "render.png">
+ <img src = "./render.png">
 
 <br>
 
