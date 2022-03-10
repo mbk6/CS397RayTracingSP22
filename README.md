@@ -32,3 +32,7 @@ Michael Korenchan | Computer Science | Univesity of Illinois
   - Added progress bar for sanity while waiting to render
   - Added simple multithreading (still needs optimization)
   - Adjusted mesh memory model (still very much a work in progress)
+- **Week of Mar 7**
+  - Adjusted multithreating
+  - Switched lighting model to recursive rendering equation with lambertian surfaces
+  - Added Cornell Box

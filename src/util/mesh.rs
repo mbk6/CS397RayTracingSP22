@@ -1,12 +1,13 @@
-// MESH - Implements mesh loading, bvh construction (todo), and bvh intersection (todo)
+// MESH - Implements mesh loading, bvh construction/intersection
 
 use std::{borrow::{BorrowMut, Borrow}, sync::Arc};
+use rayon::str::MatchIndices;
 use tobj::{self, Mesh};
 use cgmath::*;
 use std::mem;
 use rand::Rng;
 
-use super::tracing::{self, Intersectable, Triangle, Ray, RayHit};
+use super::tracing::*;
 
 type Vec3 = Vector3<f32>;
 
@@ -62,7 +63,7 @@ impl Intersectable for AABB {
             distance: 0.0,
             hitpoint: Vec3::zero(),
             normal: Vec3::zero(),
-            albedo: Vec3::zero(),
+            material: Material::default(),
         })
     }
     fn bounding_box(&self) -> Option<AABB> {
@@ -78,53 +79,6 @@ pub struct BVHNode {
     pub right: Option<Box<BVHNode>>,
     // pub primitive: Option<Box<dyn Intersectable>>,
     pub primitive: Option<IndexedTriangle>,
-}
-impl BVHNode {
-    // pub fn build_from_mesh(sm: &StaticMesh) -> Box<BVHNode> {
-    //     print!("Building BVH...");
-    //     let mut objects = Vec::new();
-    //     // populate array of total objects (inefficient for now)
-    //     // aka: iterate over triangles
-    //     for i in 0..sm.mesh.indices.len()/3 {
-    //         // load vertices
-    //         let (a,b,c) = sm.get_triangle(i);
-    //        // create triangle
-    //        objects.push(Triangle {a: a, b: b, c: c, albedo: vec3(0.5,0.5,0.5)});
-    //     }
-    //     let start: usize = 0;
-    //     let end = objects.len();
-    //     let node = BVHNode::build_from_mesh_helper(&mut objects, start, end);        
-    //     println!("Done.");
-    //     return node;
-    // }
-    // fn build_from_mesh_helper(objects: &mut Vec<Triangle>, start: usize, end: usize) -> Box<BVHNode> {
-    //     let mut node = BVHNode::default();
-    //     if end-start == 1 {
-    //         // make the node a leaf
-    //         node.primitive = Some(Box::new(objects[start].clone()));
-    //         node.aabb = objects[start].bounding_box().unwrap_or_default();
-    //     }
-    //     else {
-    //         // sort segment by random axis
-    //         let mut rng = rand::thread_rng();
-    //         let axis: usize = rng.gen_range(0..3);
-    //         let comparator = |a: &Triangle, b: &Triangle| {
-    //             let f = a.bounding_box().unwrap_or_default().min[axis];
-    //             let g = b.bounding_box().unwrap_or_default().min[axis];
-    //             f.partial_cmp(&g).unwrap_or(std::cmp::Ordering::Equal)
-    //         };
-    //         objects[start..end].sort_by(comparator);
-    //         // recurse on each side
-    //         let mid = start + (end-start)/2;
-    //         let left  = Self::build_from_mesh_helper(objects, start, mid);
-    //         let right = Self::build_from_mesh_helper(objects, mid, end);
-    //         node.aabb = AABB::aabb_surrounding(&left.aabb, &right.aabb);
-    //         node.left = Some(left);
-    //         node.right = Some(right);
-    //     }
-    //     Box::new(node)
-    // }
-
 }
 impl Intersectable for BVHNode {
     fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
@@ -162,7 +116,7 @@ impl Intersectable for BVHNode {
 #[derive(Debug, Clone)]
 pub struct StaticMesh {
     mesh: Arc<Mesh>,
-    material: Vec3, // materials to be implemented soon - right now just albedo
+    material: Material, // materials to be implemented soon - right now just albedo
     transform: Matrix4<f32>, // transforms to be implemented soon
     bvh_root: Option<Box<BVHNode>>,
 }
@@ -192,6 +146,7 @@ impl StaticMesh {
     //     println!("Computed {} normals", self.mesh.normals.len() / 3);
     // }
     
+    // load a mesh from file to create a new StaticMesh object
     pub fn load_from_file(file_name: &str) -> StaticMesh {
         // load obj
         let obj = tobj::load_obj(
@@ -214,7 +169,7 @@ impl StaticMesh {
         let mut sm = StaticMesh { 
             mesh: Arc::new(models.remove(0).mesh),
             bvh_root: None,
-            material: vec3(0.0,0.5,0.2),
+            material: Material { albedo: vec3(0.2,0.0,0.5), ..Default::default() },
             transform: Matrix4::zero(),
         };
         //sm.compute_normals();
@@ -222,13 +177,14 @@ impl StaticMesh {
         sm
     }
 
+    // build the StaticMesh's bvh using its mesh
     pub fn build_bvh(&mut self) {
         if self.bvh_root.is_some() { return }
         print!("Building BVH...");
         // make temporary array of total triangles
         let mut tris = Vec::new();
         for i in 0..self.mesh.indices.len()/3 {
-            tris.push(IndexedTriangle { idx: i, sm: self.mesh.clone() })
+            tris.push(IndexedTriangle { idx: i, mesh: self.mesh.clone() })
         }
         let start: usize = 0;
         let end = tris.len();
@@ -236,11 +192,12 @@ impl StaticMesh {
         self.bvh_root = Some(node);
         println!("Done.");
     }
+    // helper for bvh construction recursion
     fn build_bvh_helper(&self, tris: &mut Vec<IndexedTriangle>, start: usize, end: usize) -> Box<BVHNode> { // start/end = triangle indices in range (0..indices.len()/3)
         let mut node = BVHNode::default();
         if end-start == 1 {
             // make the node a leaf
-            let tri = IndexedTriangle { idx: start, sm: self.mesh.clone()};
+            let tri = IndexedTriangle { idx: start, mesh: self.mesh.clone()};
             node.aabb = tri.bounding_box().unwrap_or_default();
             node.primitive = Some(tri);
         }
@@ -267,11 +224,7 @@ impl StaticMesh {
 
     // retrieves the idx'th triangle from the mesh
     pub fn get_triangle(&self, idx: usize) -> (Vec3, Vec3, Vec3) {
-        let (x,y,z) = (self.mesh.indices[idx*3] as usize, self.mesh.indices[idx*3+1] as usize, self.mesh.indices[idx*3+2] as usize);
-        let a = vec3(self.mesh.positions[x*3], self.mesh.positions[x*3+1], self.mesh.positions[x*3+2]);
-        let b = vec3(self.mesh.positions[y*3], self.mesh.positions[y*3+1], self.mesh.positions[y*3+2]);
-        let c = vec3(self.mesh.positions[z*3], self.mesh.positions[z*3+1], self.mesh.positions[z*3+2]);
-        (a,b,c)
+        Self::get_triangle_from_mesh(&self.mesh, idx)
     }
     pub fn get_triangle_from_mesh(mesh: &Mesh, idx: usize) -> (Vec3, Vec3, Vec3) {
         let (x,y,z) = (mesh.indices[idx*3] as usize, mesh.indices[idx*3+1] as usize, mesh.indices[idx*3+2] as usize);
@@ -283,10 +236,14 @@ impl StaticMesh {
 }
 impl Intersectable for StaticMesh {
     fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
-        match &self.bvh_root {
-            Some(node) => node.intersect_ray(ray, t_min, t_max),
-            None => None
+        // intersect bvh but replace material data
+        if let Some(root) = &self.bvh_root {
+            if let Some(mut hit) = root.intersect_ray(ray, t_min, t_max) {
+                hit.material = self.material;
+                return Some(hit);
+            }
         }
+        return None;
     }
     fn bounding_box(&self) -> Option<AABB> {
         match &self.bvh_root {
@@ -300,12 +257,12 @@ impl Intersectable for StaticMesh {
 pub struct IndexedTriangle {
     // represents a triangle in an indexed-triangle data structure
     pub idx: usize,
-    pub sm: Arc<Mesh>,
+    pub mesh: Arc<Mesh>,
 }
 impl Intersectable for IndexedTriangle {
     fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
         // lookup vertex data from mesh
-        let (a,b,c) = StaticMesh::get_triangle_from_mesh(&self.sm, self.idx);
+        let (a,b,c) = StaticMesh::get_triangle_from_mesh(&self.mesh, self.idx);
         // usual ray-triangle intersection
         const EPSILON : f32 = 0.0001;
         let e1 = b - a;
@@ -327,11 +284,11 @@ impl Intersectable for IndexedTriangle {
             distance: t,
             hitpoint: hitpoint,
             normal: e1.cross(e2).normalize(),
-            albedo: vec3(0.3, 0.0, 0.5),
+            material: Material::default(), // doesn't matter, since we use the material of the mesh this belongs to
         })
     }
     fn bounding_box(&self) -> Option<AABB> {
-        let (a,b,c) = StaticMesh::get_triangle_from_mesh(&self.sm, self.idx);
+        let (a,b,c) = StaticMesh::get_triangle_from_mesh(&self.mesh, self.idx);
         Some(AABB {
             min: vec3(
                 f32::min(a.x,f32::min(b.x, c.x)),
