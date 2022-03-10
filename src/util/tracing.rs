@@ -463,6 +463,6 @@ pub fn run() {
     };
 
     // render and write output
-    scene.render_to_image().save_with_format("mp1.png", ImageFormat::Png);
+    scene.render_to_image().save_with_format("render.png", ImageFormat::Png);
 
 }

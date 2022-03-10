@@ -1,6 +1,11 @@
 # CS397 Spring 2022 - Ray Tracing Study
 Michael Korenchan | Computer Science | Univesity of Illinois
 
+## Current Render:
+ <img src = "render.png">
+
+<br>
+
 ## Progress Log:
 - **Week of Jan 21:**
   - Wrote my first Rust program! 
