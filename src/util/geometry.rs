@@ -1,7 +1,6 @@
-// MESH - Implements mesh loading, bvh construction/intersection
+// GEOMETRY - Implements geometric primitives, mesh loading, bvh construction/intersection
 
-use std::{borrow::{BorrowMut, Borrow}, sync::Arc};
-use rayon::str::MatchIndices;
+use std::{sync::Arc};
 use tobj::{self, Mesh};
 use cgmath::*;
 use std::mem;
@@ -11,6 +10,12 @@ use super::tracing::*;
 
 type Vec3 = Vector3<f32>;
 
+
+////////////////////////////////////////////////////////
+/////   INTERSECTABLES
+////////////////////////////////////////////////////////
+
+// AXIS-ALIGNED BOUNDING BOX
 #[derive(Debug, Clone, Copy)]
 pub struct AABB {
     pub min: Vec3,
@@ -71,7 +76,7 @@ impl Intersectable for AABB {
     }
 }
 
-
+// BOUNDING VOLUME HIERARCHY - tree of bounding boxes and primitives
 #[derive(Debug, Clone, Default)]
 pub struct BVHNode {
     pub aabb: AABB,
@@ -113,7 +118,8 @@ impl Intersectable for BVHNode {
     }
 }
 
-#[derive(Debug, Clone)]
+// STATIC MESH
+#[derive(Clone)]
 pub struct StaticMesh {
     mesh: Arc<Mesh>,
     material: Material, // materials to be implemented soon - right now just albedo
@@ -121,30 +127,6 @@ pub struct StaticMesh {
     bvh_root: Option<Box<BVHNode>>,
 }
 impl StaticMesh {
-    // pub fn compute_normals(&mut self) {
-    //     if !self.mesh.normals.is_empty() { return };
-    //     self.mesh.normals = vec![0.0; self.mesh.positions.len()];
-    //     // iterate over triangles
-    //     for i in 0..self.mesh.indices.len()/3 {
-    //         // load vertices
-    //         let (a,b,c) = self.get_triangle(i);
-    //         // compute normal
-    //         let n = 0.5* (b-a).cross(c-a);
-    //         // accumulate into normals array
-    //         let (x,y,z) = (self.mesh.indices[i*3] as usize, self.mesh.indices[i*3+1] as usize, self.mesh.indices[i*3+2] as usize);
-    //         self.mesh.normals[x*3] += n.x; self.mesh.normals[x*3+1] += n.y; self.mesh.normals[x*3+2] += n.z;
-    //         self.mesh.normals[y*3] += n.x; self.mesh.normals[y*3+1] += n.y; self.mesh.normals[y*3+2] += n.z;
-    //         self.mesh.normals[z*3] += n.x; self.mesh.normals[z*3+1] += n.y; self.mesh.normals[z*3+2] += n.z;
-    //     }
-    //     // normalize all normals
-    //     for i in 0..self.mesh.normals.len()/3 {
-    //         let m = vec3(self.mesh.normals[i*3],self.mesh.normals[i*3+1],self.mesh.normals[i*3+2]).magnitude();
-    //         self.mesh.normals[i*3] /= m;
-    //         self.mesh.normals[i*3+1] /= m;
-    //         self.mesh.normals[i*3+2] /= m;
-    //     }
-    //     println!("Computed {} normals", self.mesh.normals.len() / 3);
-    // }
     
     // load a mesh from file to create a new StaticMesh object
     pub fn load_from_file(file_name: &str) -> StaticMesh {
@@ -253,6 +235,7 @@ impl Intersectable for StaticMesh {
     }
 }
 
+// INDEXED TRIANGLE - triangle object that references data in an indexed-mesh structure
 #[derive(Debug, Clone)]
 pub struct IndexedTriangle {
     // represents a triangle in an indexed-triangle data structure
@@ -301,5 +284,129 @@ impl Intersectable for IndexedTriangle {
                 f32::max(a.z,f32::max(b.z, c.z))
             ),
         })
+    }
+}
+
+
+////////////////////////////////////////////////////////
+/////   PRIMITIVES
+////////////////////////////////////////////////////////
+// SPHERE
+pub struct Sphere {
+    pub center: Vec3,
+    pub radius: f32,
+    pub material: Material,
+}
+impl Intersectable for Sphere {
+    fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
+        // ray-sphere intersection
+        let f = ray.origin - self.center;
+        let a = ray.direction.magnitude2();
+        let b = 2.0*f.dot(ray.direction);
+        let c = f.magnitude2() - self.radius*self.radius;
+        let d = b*b - 4.0*a*c;
+        if d < 0.0 {
+            return None;
+        }
+        else {
+            let t = (-b - d.sqrt()) / (2.0*a);
+            let hitpoint = ray.origin + t*ray.direction;
+            if t < t_min || t > t_max { return None }
+            return Some(RayHit {
+                distance: t,
+                hitpoint: hitpoint,
+                normal: (hitpoint - self.center).normalize(),
+                material: self.material,
+            })
+        }
+    }
+    fn bounding_box(&self) -> Option<AABB> {
+        Some(AABB {
+            min: self.center - vec3(self.radius,self.radius,self.radius),
+            max: self.center + vec3(self.radius,self.radius,self.radius),
+        })
+    }
+}
+
+// TRIANGLE
+#[derive(Clone, Copy)]
+pub struct Triangle {
+    pub a: Vec3,
+    pub b: Vec3,
+    pub c: Vec3,
+    pub material: Material,
+}
+impl Intersectable for Triangle {
+    fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
+        // ray-triangle intersection
+        const EPSILON : f32 = 0.0001;
+        let e1 = self.b - self.a;
+        let e2 = self.c - self.a;
+        let q = ray.direction.cross(e2);
+        let a = e1.dot(q);
+        if a.abs() < EPSILON { return None; }
+        let f = 1.0/a;
+        let s = ray.origin - self.a;
+        let u = f*s.dot(q);
+        if u < 0.0 { return None; }
+        let r = s.cross(e1);
+        let v = f*ray.direction.dot(r);
+        if v < 0.0 || u+v > 1.0 { return None }
+        let t = f*e2.dot(r);
+        let hitpoint = ray.origin + t*ray.direction;
+        if t < t_min || t > t_max { return None }
+        return Some(RayHit {
+            distance: t,
+            hitpoint: hitpoint,
+            normal: e1.cross(e2).normalize(),
+            material: self.material,
+        })
+    }
+    fn bounding_box(&self) -> Option<AABB> {
+        Some(AABB {
+            min: vec3(
+                f32::min(self.a.x,f32::min(self.b.x, self.c.x)),
+                f32::min(self.a.y,f32::min(self.b.y, self.c.y)),
+                f32::min(self.a.z,f32::min(self.b.z, self.c.z))
+            ),
+            max: vec3(
+                f32::max(self.a.x,f32::max(self.b.x, self.c.x)),
+                f32::max(self.a.y,f32::max(self.b.y, self.c.y)),
+                f32::max(self.a.z,f32::max(self.b.z, self.c.z))
+            ),
+        })
+    }
+}
+
+// PLANE
+pub struct Plane {
+    pub point: Vec3,
+    pub normal: Vec3,
+    pub material: Material,
+}
+impl Intersectable for Plane {
+    fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
+        // ray-plane intersection
+        let to_ray_origin = ray.origin - self.point;
+        let origin_dist = dot(to_ray_origin, self.normal);
+        let n = origin_dist.signum() * self.normal;
+        let d = ray.direction.dot(n);
+        if d >= 0.0 { 
+            return None;
+        }
+        else {
+            let t = origin_dist.abs() / d.abs();
+            if t < t_min || t > t_max { return None }
+            let hitpoint = ray.origin + t*ray.direction;
+            return Some(RayHit {
+                distance: t,
+                hitpoint: hitpoint,
+                normal: n,
+                material: self.material,
+            })
+        }
+    }
+    fn bounding_box(&self) -> Option<AABB> {
+        None
     }
 }

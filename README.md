@@ -41,3 +41,9 @@ Michael Korenchan | Computer Science | Univesity of Illinois
   - Adjusted multithreating
   - Switched lighting model to recursive rendering equation with lambertian surfaces
   - Added Cornell Box
+- **Week of Mar 14 (Spring Break)**
+  - Spent a ton of time trying to get code running on GPU and couldn't get it working
+- **Week of Mar 12**
+  - Played around with different directional sampling functions
+  - Adjusted shading model
+  - Lambertian surfaces look decent now

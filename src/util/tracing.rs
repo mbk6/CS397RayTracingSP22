@@ -11,22 +11,22 @@ use std::{ops::Neg, iter::Scan};
 use image::*;
 use cgmath::*;
 use rand::Rng;
-use indicatif::ProgressBar;
+use indicatif::{ProgressBar, ProgressStyle};
 use rayon::str::MatchIndices;
 use std::sync::mpsc;
 use std::sync::Arc;
 use crossbeam::thread;
 use rayon::prelude::*;
-use super::mesh::StaticMesh;
-use super::mesh::{AABB};
+use super::geometry::*;
 
 ////////////////////////////////////////////////////////
 /////   CONSTANTS, TYPEDEFS, ENUMS
 ////////////////////////////////////////////////////////
 type Vec3 = Vector3<f32>;
 type Color = Vec3;
-const TRACE_RECURSION_DEPTH: u32 = 3;
-const TRACE_SAMPLES: u32 = 50;
+type ImportanceSampler = fn(&RayHit) -> (Vec3, f32); // normal -> (sample direction, contribution)
+const TRACE_RECURSION_DEPTH: u32 = 100;
+const TRACE_SAMPLES: u32 = 1;
 
 #[derive(Debug, Clone, Copy)]
 pub enum CameraProjectionMode {
@@ -44,26 +44,55 @@ pub trait Intersectable {
     fn bounding_box(&self) -> Option<AABB>; // Option because not all primitives have bounding boxes (e.g. plane)
 }
 
-
 ////////////////////////////////////////////////////////
 /////   UTILITY FUNCTIONS
 ////////////////////////////////////////////////////////
 
 // uniformly samples a hemisphere given by normal n
-fn sample_hemisphere(n: Vec3) -> Vec3 {
-    let mut rand;
+pub fn sample_hemisphere(hit: &RayHit) -> (Vec3, f32) {
+    let mut rng = rand::thread_rng();
+    let mut dir;
     // sample unrotated sphere
     loop {
-        rand = Vec3 { x: rand::thread_rng().gen_range(-1.0..1.0), y: rand::thread_rng().gen_range(-1.0..1.0), z: rand::thread_rng().gen_range(-1.0..1.0) }.normalize();
-        if rand.magnitude2() <= 1.0 {
-            if rand.y < 0.0 { rand.y *= -1.0 };
-            rand = rand.normalize();
+        dir = Vec3 { x: rng.gen_range(-1.0..1.0), y: rng.gen_range(-1.0..1.0), z: rng.gen_range(-1.0..1.0) }.normalize();
+        if dir.magnitude2() <= 1.0 {
+            if dir.y < 0.0 { dir.y *= -1.0 };
+            dir = dir.normalize();
             break;
         }
     }
     // rotate relative to given normal
-    let rotation = cgmath::Basis3::between_vectors(Vec3::unit_y(), n);
-    rotation.rotate_vector(rand)
+    let rotation = cgmath::Basis3::between_vectors(Vec3::unit_y(), hit.normal);
+    (rotation.rotate_vector(dir), 1.0/(2.0*PI))
+}
+
+// based on http://three-eyed-games.com/2018/05/12/gpu-path-tracing-in-unity-part-2/
+pub fn alpha_sample(hit: &RayHit) -> (Vec3, f32) {
+    let alpha = 1.0;
+    let mut rng = rand::thread_rng();
+    // pick random point on sphere sitting on xz plane
+    let cos_theta = f32::powf(rng.gen_range(0.0..1.0), 1.0/(alpha+1.0));
+    let sin_theta = f32::sqrt(f32::max(0.0, 1.0 - cos_theta*cos_theta));
+    let phi = 2.0*PI*rng.gen_range(0.0..1.0);
+    let vec = vec3(f32::cos(phi)*sin_theta, f32::sin(phi)*sin_theta, cos_theta);
+    
+    // rotate relative to given normal
+    let rotation = cgmath::Basis3::between_vectors(Vec3::unit_z(), hit.normal);
+    (rotation.rotate_vector(vec), (alpha+1.0)*f32::powf(cos_theta, alpha) / (2.0*PI))
+}
+
+// based on raytracing in one weekend
+pub fn rtow_sample(hit: &RayHit) -> (Vec3, f32) {
+    let mut rng = rand::thread_rng();
+    let mut dir;
+    // sample unrotated sphere
+    loop {
+        dir = Vec3 { x: rng.gen_range(-1.0..1.0), y: rng.gen_range(-1.0..1.0), z: rng.gen_range(-1.0..1.0) }.normalize();
+        if dir.magnitude2() <= 1.0 {
+            break;
+        }
+    }
+    (hit.hitpoint + hit.normal + dir, 1.0/(2.0*PI))
 }
 
 
@@ -76,25 +105,28 @@ pub struct Ray {
     pub origin: Vec3,
     pub direction: Vec3,
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct RayHit {
     pub distance: f32,
     pub hitpoint: Vec3,
     pub normal: Vec3,
     pub material: Material,
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct Material {
     pub albedo: Vec3,
     pub emission: Vec3,
+    pub ray_sampler: ImportanceSampler,
 }
 impl Default for Material {
     fn default() -> Material {
         Material { 
             albedo: vec3(1.0,1.0,1.0),
             emission: Vec3::zero(),
+            ray_sampler: sample_hemisphere as ImportanceSampler,
         }
     }
+
 }
 
 // CAMERA
@@ -104,18 +136,19 @@ pub struct Camera {
     pub eyepoint: Vec3,
     pub view_dir: Vec3,
     pub up: Vec3,
-    pub view_plane_dist: f32,
-    pub pixel_size: f32,
+    pub focal_length: f32,
     pub projection_mode: CameraProjectionMode,
     pub screen_width: u32,
     pub screen_height: u32,
     pub aa_sample_count: u32, // Must be a perfect square
     pub max_trace_dist: f32,
+    pub gamma: f32,
 }
 impl Camera {
     // generate camera rays given pixel coordinates and sample count
     // currently uses multi-jittered sampling
     pub fn generate_rays(&self, screen_x: u32, screen_y: u32) -> Vec<Ray> {
+        let pixel_size = 1.0 / self.screen_height as f32;
         let mut rays = Vec::new();
         let n = self.aa_sample_count as f32;
         let rootn = n.sqrt();
@@ -127,15 +160,15 @@ impl Camera {
             let subpixel_x = (i / rootn as u32) as f32;
             let subpixel_y = (i % rootn as u32) as f32;
             let subpixel_offset = vec2(
-                (subpixel_x - 0.5*rootn)*self.pixel_size/rootn + (rand_x - 0.5*n)*self.pixel_size/n,
-                (subpixel_y - 0.5*rootn)*self.pixel_size/rootn + (rand_y - 0.5*n)*self.pixel_size/n,
+                (subpixel_x - 0.5*rootn)*pixel_size/rootn + (rand_x - 0.5*n)*pixel_size/n,
+                (subpixel_y - 0.5*rootn)*pixel_size/rootn + (rand_y - 0.5*n)*pixel_size/n,
              );
             
             // compute pixel center and offset by jitter
             let cam_space_pixel_center = vec3(
-                self.pixel_size*(screen_x as f32 - 0.5*(self.screen_width as f32) + 0.5) + subpixel_offset.x,
-                self.pixel_size*(0.5 + 0.5*(self.screen_height as f32) - screen_y as f32) + subpixel_offset.y,
-                -self.view_plane_dist
+                pixel_size*(screen_x as f32 - 0.5*(self.screen_width as f32) + 0.5) + subpixel_offset.x,
+                pixel_size*(0.5 + 0.5*(self.screen_height as f32) - screen_y as f32) + subpixel_offset.y,
+                -self.focal_length
             ).normalize();
 
             // create ray with direction still in camera space
@@ -174,6 +207,7 @@ impl Scene {
     pub fn render_to_image(&self) -> RgbImage {
         println!("Rendering...");
         let progress_bar = ProgressBar::new((self.camera.screen_width*self.camera.screen_height) as u64);
+        progress_bar.set_style(ProgressStyle::default_bar().template("[{elapsed_precise}, {eta_precise}] {wide_bar:.green/blue} {pos:>7}/{len:7}").progress_chars("##-"));
         // create image and thread channel
         let mut img = RgbImage::new(self.camera.screen_width, self.camera.screen_height);
         // iterate through pixels...
@@ -184,19 +218,13 @@ impl Scene {
                 let cam_rays = self.camera.generate_rays(x as u32, y as u32);
                 let mut final_color = Vec3::zero();
                 for sample_idx in 0..cam_rays.len() {
-                    final_color += match self.intersect_ray(&cam_rays[sample_idx], 0.0, self.camera.max_trace_dist) {
-                        None => Vec3::zero(),
-                        Some(hit) => {
-                            // run shading algorithm
-                            self.shade_hit(&hit, 0)
-                            // self.phong_shade_hit(&hit)
-                        }
-                    };
+                    final_color += self.shade_ray(&cam_rays[sample_idx], 0);
+                    // final_color += self.phong_shade_ray(&cam_rays[sample_idx]);
                 }
                 final_color = final_color / cam_rays.len() as f32;
-                *(data[3*x])   = (final_color.x.clamp(0.0,1.0) * 255.9999) as u8;
-                *(data[3*x+1]) = (final_color.y.clamp(0.0,1.0) * 255.9999) as u8;
-                *(data[3*x+2]) = (final_color.z.clamp(0.0,1.0) * 255.9999) as u8;
+                *(data[3*x])   = (f32::powf(final_color.x.clamp(0.0,1.0), 1.0/self.camera.gamma) * 255.9999) as u8;
+                *(data[3*x+1]) = (f32::powf(final_color.y.clamp(0.0,1.0), 1.0/self.camera.gamma) * 255.9999) as u8;
+                *(data[3*x+2]) = (f32::powf(final_color.z.clamp(0.0,1.0), 1.0/self.camera.gamma) * 255.9999) as u8;
                 progress_bar.inc(1);
             }
         });
@@ -204,48 +232,67 @@ impl Scene {
         println!("Done.");
         return img;
     }
+    
+    // computes same background color as raytracing in one weekend
+    fn background_color(v: &Vec3) -> Color {
+        let u = v.normalize();
+        let t = 0.5*(u.y+1.0);
+        (1.0-t)*vec3(1.0, 1.0, 1.0) + t*vec3(0.5, 0.7, 1.0)
+    }
+    
     // computes phong shading for a given rayhit
-    fn phong_shade_hit(&self, hit: &RayHit) -> Color {
-        // standard phong shading
-        let to_light = (self.point_light_pos - hit.hitpoint).normalize();
-        let to_camera = (self.camera.eyepoint - hit.hitpoint).normalize();
-        let reflected = -to_light + 2.0*dot(to_light, hit.normal)*hit.normal;
-        let diffuse_weight = (dot(hit.normal, to_light)).clamp(0.0, 1.0);
-        let specular_weight = dot(to_camera, reflected).clamp(0.0, 1.0).powf(40.0);
-        // cast shadow ray
-        let shadow_ray = Ray { origin: hit.hitpoint + 0.01*hit.normal, direction: to_light };
-        let shadow_weight = match self.intersect_ray(&shadow_ray, 0.0, (self.point_light_pos - hit.hitpoint).magnitude()) {
-            None => 1.0,
-            Some(hit) => if hit.distance*hit.distance > (self.point_light_pos - hit.hitpoint).magnitude2() { 1.0 } else { 0.3 }
-        };
-        return shadow_weight * (self.ambient + diffuse_weight*hit.material.albedo + specular_weight*vec3(0.4, 0.4, 0.4));
+    fn phong_shade_ray(&self, ray: &Ray) -> Color {
+        // get hit
+        match self.intersect_ray(ray, 0.0, self.camera.max_trace_dist) {
+            None => Scene::background_color(&ray.direction),
+            Some(hit) => {
+                // standard phong shading
+                let to_light = (self.point_light_pos - hit.hitpoint).normalize();
+                let to_camera = (self.camera.eyepoint - hit.hitpoint).normalize();
+                let reflected = -to_light + 2.0*dot(to_light, hit.normal)*hit.normal;
+                let diffuse_weight = (dot(hit.normal, to_light)).clamp(0.0, 1.0);
+                let specular_weight = dot(to_camera, reflected).clamp(0.0, 1.0).powf(40.0);
+                // cast shadow ray
+                let shadow_ray = Ray { origin: hit.hitpoint + 0.01*hit.normal, direction: to_light };
+                let shadow_weight = match self.intersect_ray(&shadow_ray, 0.0, (self.point_light_pos - hit.hitpoint).magnitude()) {
+                    None => 1.0,
+                    Some(hit) => if hit.distance*hit.distance > (self.point_light_pos - hit.hitpoint).magnitude2() { 1.0 } else { 0.3 }
+                };
+                
+                shadow_weight * (self.ambient + diffuse_weight*hit.material.albedo + specular_weight*vec3(0.4, 0.4, 0.4))
+            }
+        }
     }
+    
     // computes shading for a ray hit according to the monte-carlo integrated rendering equation
-    fn shade_hit(&self, hit: &RayHit, depth: u32) -> Color {
+    fn shade_ray(&self, ray: &Ray, depth: u32) -> Color {
         if depth >= TRACE_RECURSION_DEPTH { 
-            return vec3(0.4,0.4,0.4); 
+            return 0.3*Scene::background_color(&ray.direction); // ambient light model 
         }
-        // accumulate integral
-        let mut integral = Color::zero();
-        for i in 0..TRACE_SAMPLES {
-            // pick new direction, generate ray, and recurse
-            let new_dir = sample_hemisphere(hit.normal);
-            let new_ray = Ray { origin: hit.hitpoint + 0.001*hit.normal, direction: new_dir };
-            let brdf_term = hit.material.albedo / PI; // for now just using the lambersion brdf
-            let dot_term = new_dir.dot(hit.normal).clamp(0.0,1.0);
-            let incoming_light = match self.intersect_ray(&new_ray, 0.0, self.camera.max_trace_dist) {
-                Some(hit) => self.shade_hit(&hit, depth+1),
-                None => Vec3::zero() // background is black for now
-            };
-            // accumulate into integral
-            integral += dot_term*(brdf_term.mul_element_wise(incoming_light));
-        }
-        integral *= 2.0*PI / TRACE_SAMPLES as f32; 
-
-        // total light = integrated + emitted light
-        hit.material.emission + integral
+        // get hit
+        match self.intersect_ray(ray, 0.001, self.camera.max_trace_dist.clone()) {
+            None => Scene::background_color(&ray.direction),
+            Some(hit) => {
+                // accumulate integral
+                let mut integral = Color::zero();
+                for _i in 0..TRACE_SAMPLES {
+                    // pick new direction, generate ray, and recurse
+                    let (new_dir, pdf) = (hit.material.ray_sampler)(&hit);
+                    let new_ray = Ray { origin: hit.hitpoint, direction: new_dir };
+                    
+                    let brdf_term = hit.material.albedo / PI; // for now just using the lambersion brdf
+                    let dot_term = new_dir.dot(hit.normal).clamp(0.0,1.0);
+                    let incoming_light = self.shade_ray(&new_ray, depth+1);
+                    // accumulate into integral
+                    integral += (dot_term*(brdf_term.mul_element_wise(incoming_light))) / pdf;
+                }
+                integral /= TRACE_SAMPLES as f32; 
+        
+                // total light = integrated + emitted light
+                hit.material.emission + integral
+            }
+        }        
     }
-
 }
 impl Intersectable for Scene {
     fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
@@ -273,132 +320,6 @@ impl Intersectable for Scene {
     }
 }
 
-// SPHERE
-pub struct Sphere {
-    pub center: Vec3,
-    pub radius: f32,
-    pub material: Material,
-}
-impl Intersectable for Sphere {
-    fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
-        // ray-sphere intersection
-        let f = ray.origin - self.center;
-        let a = ray.direction.magnitude2();
-        let b = 2.0*f.dot(ray.direction);
-        let c = f.magnitude2() - self.radius*self.radius;
-        let d = b*b - 4.0*a*c;
-        if d < 0.0 {
-            return None;
-        }
-        else {
-            let t = (-b - d.sqrt()) / (2.0*a);
-            let hitpoint = ray.origin + t*ray.direction;
-            if t < t_min || t > t_max { return None }
-            return Some(RayHit {
-                distance: t,
-                hitpoint: hitpoint,
-                normal: (hitpoint - self.center).normalize(),
-                material: self.material,
-            })
-        }
-    }
-    fn bounding_box(&self) -> Option<AABB> {
-        Some(AABB {
-            min: self.center - vec3(self.radius,self.radius,self.radius),
-            max: self.center + vec3(self.radius,self.radius,self.radius),
-        })
-    }
-}
-
-// TRIANGLE
-#[derive(Debug, Clone, Copy)]
-pub struct Triangle {
-    pub a: Vec3,
-    pub b: Vec3,
-    pub c: Vec3,
-    pub material: Material,
-}
-impl Intersectable for Triangle {
-    fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
-        // ray-triangle intersection
-        const EPSILON : f32 = 0.0001;
-        let e1 = self.b - self.a;
-        let e2 = self.c - self.a;
-        let q = ray.direction.cross(e2);
-        let a = e1.dot(q);
-        if a.abs() < EPSILON { return None; }
-        let f = 1.0/a;
-        let s = ray.origin - self.a;
-        let u = f*s.dot(q);
-        if u < 0.0 { return None; }
-        let r = s.cross(e1);
-        let v = f*ray.direction.dot(r);
-        if v < 0.0 || u+v > 1.0 { return None }
-        let t = f*e2.dot(r);
-        let hitpoint = ray.origin + t*ray.direction;
-        if t < t_min || t > t_max { return None }
-        return Some(RayHit {
-            distance: t,
-            hitpoint: hitpoint,
-            normal: e1.cross(e2).normalize(),
-            material: self.material,
-        })
-    }
-    fn bounding_box(&self) -> Option<AABB> {
-        Some(AABB {
-            min: vec3(
-                f32::min(self.a.x,f32::min(self.b.x, self.c.x)),
-                f32::min(self.a.y,f32::min(self.b.y, self.c.y)),
-                f32::min(self.a.z,f32::min(self.b.z, self.c.z))
-            ),
-            max: vec3(
-                f32::max(self.a.x,f32::max(self.b.x, self.c.x)),
-                f32::max(self.a.y,f32::max(self.b.y, self.c.y)),
-                f32::max(self.a.z,f32::max(self.b.z, self.c.z))
-            ),
-        })
-    }
-}
-
-// PLANE
-pub struct Plane {
-    pub point: Vec3,
-    pub normal: Vec3,
-    pub material: Material,
-}
-impl Intersectable for Plane {
-    fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
-        // ray-plane intersection
-        let to_ray_origin = ray.origin - self.point;
-        let origin_dist = dot(to_ray_origin, self.normal);
-        let n = origin_dist.signum() * self.normal;
-        let d = ray.direction.dot(n);
-        if d >= 0.0 { 
-            return None;
-        }
-        else {
-            let t = origin_dist.abs() / d.abs();
-            if t < t_min || t > t_max { return None }
-            let hitpoint = ray.origin + t*ray.direction;
-            return Some(RayHit {
-                distance: t,
-                hitpoint: hitpoint,
-                normal: n,
-                material: self.material,
-            })
-        }
-    }
-    fn bounding_box(&self) -> Option<AABB> {
-        None
-    }
-}
-
-
-
-
-
-
-
 
 
 
@@ -407,62 +328,63 @@ pub fn run() {
     // initialize scene
     let scene = Scene {
         camera: Camera {
-            eyepoint: vec3(0.0, 2.0, 4.0),
+            eyepoint: vec3(0.0, 2.0, 5.0),
             view_dir: -Vec3::unit_z(),
             up: Vec3::unit_y(),
-            view_plane_dist: 0.1,
-            pixel_size: 0.001,
+            focal_length: 0.6,
             projection_mode: CameraProjectionMode::Perspective,
-            screen_width: 200,
-            screen_height: 200,
-            aa_sample_count: 9,
+            screen_width: 400,
+            screen_height: 400,
+            aa_sample_count: 100,
             max_trace_dist: 100000.0,
+            gamma: 1.0,
         },
         objects: Arc::new(vec![
 
-            //Arc::new(StaticMesh::load_from_file("./obj/teapot.obj")),
+            Arc::new(StaticMesh::load_from_file("./obj/teapot.obj")),
             Arc::new(Plane {
-                point: vec3(0.0, -2.0, 0.0),
+                point: vec3(0.0, 0.0, 0.0),
                 normal: Vec3::unit_y(),
-                material: Material { albedo: vec3(0.6,0.6,0.6), ..Default::default() },
+                material: Material { albedo: vec3(0.4,0.4,0.4), ray_sampler: alpha_sample as ImportanceSampler, ..Default::default() },
             }),
-            Arc::new(Plane {
-                point: vec3(0.0, 0.0, -4.0),
-                normal: Vec3::unit_z(),
-                material: Material { albedo: vec3(0.6,0.6,0.6), ..Default::default() },
-            }),
-            Arc::new(Plane {
-                point: vec3(0.0, 5.0, 0.0),
-                normal: -Vec3::unit_y(),
-                material: Material { albedo: vec3(0.6,0.6,0.6), ..Default::default() },
-            }),
-            Arc::new(Plane {
-                point: vec3(-5.0, 0.0, 0.0),
-                normal: Vec3::unit_x(),
-                material: Material { albedo: vec3(0.6,0.0,0.0), ..Default::default() },
-            }),
-            Arc::new(Plane {
-                point: vec3(5.0, 0.0, 0.0),
-                normal: -Vec3::unit_x(),
-                material: Material { albedo: vec3(0.0,0.6,0.0), ..Default::default() },
-            }),
-            Arc::new(Sphere {
-                center: vec3(0.0,6.0,-1.0),
-                radius: 1.6,
-                material: Material { albedo: vec3(0.6,0.3,0.3), emission: vec3(10.0,10.0,10.0) },
-            }),
-            // Arc::new(Triangle {
-            //     a: vec3(0.0, 6.0, -6.0),
-            //     b: vec3(-4.0, 6.0, -2.0),
-            //     c: vec3(4.0, 6.0, -2.0),
-            //     material: Material { albedo: vec3(1.0,1.0,1.0), emission: vec3(7.0,7.0,7.0) },
+            // Arc::new(Plane {
+            //     point: vec3(0.0, 0.0, -4.0),
+            //     normal: Vec3::unit_z(),
+            //     material: Material { albedo: vec3(0.6,0.6,0.6), ray_sampler: sample_hemisphere as ImportanceSampler, ..Default::default() },
             // }),
+            // Arc::new(Plane {
+            //     point: vec3(0.0, 5.0, 0.0),
+            //     normal: -Vec3::unit_y(),
+            //     material: Material { albedo: vec3(0.6,0.6,0.6), ray_sampler: sample_hemisphere as ImportanceSampler, ..Default::default() },
+            // }),
+            // Arc::new(Plane {
+            //     point: vec3(-5.0, 0.0, 0.0),
+            //     normal: Vec3::unit_x(),
+            //     material: Material { albedo: vec3(0.6,0.0,0.0), ray_sampler: sample_hemisphere as ImportanceSampler, ..Default::default() },
+            // }),
+            // Arc::new(Plane {
+            //     point: vec3(5.0, 0.0, 0.0),
+            //     normal: -Vec3::unit_x(),
+            //     material: Material { albedo: vec3(0.0,0.6,0.0), ray_sampler: sample_hemisphere as ImportanceSampler, ..Default::default() },
+            // }),
+            // Arc::new(Sphere {
+            //     center: vec3(0.0,6.0,-1.0),
+            //     radius: 1.6,
+            //     material: Material { albedo: vec3(0.6,0.3,0.3), emission: vec3(10.0,10.0,10.0), ray_sampler: sample_hemisphere as ImportanceSampler },
+            // }),
+
+            
+            Arc::new(Sphere {
+                center: vec3(-0.8,0.5,2.0),
+                radius: 0.4,
+                material: Material { albedo: vec3(0.3,0.3,0.3), emission: vec3(5.0,0.0,5.0), ray_sampler: alpha_sample as ImportanceSampler },
+            }),
         ]),
         point_light_pos: vec3(0.0,1.0,5.0), // for phong shading only
         ambient: vec3(0.1,0.1,0.1), // for phong shading only
     };
 
     // render and write output
-    scene.render_to_image().save_with_format("render.png", ImageFormat::Png);
+    scene.render_to_image().save_with_format("render.png", ImageFormat::Png).unwrap();
 
 }

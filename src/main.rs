@@ -1,5 +1,3 @@
-use rand::distributions::uniform::SampleBorrow;
-
 mod util;
 
 // runs raytracer
