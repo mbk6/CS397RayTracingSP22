@@ -279,7 +279,7 @@ pub fn run() {
             projection_mode: CameraProjectionMode::Perspective,
             screen_width: 400,
             screen_height: 400,
-            aa_sample_count: 1000,
+            aa_sample_count: 2000,
             max_trace_dist: 100000.0,
             gamma: 1.0,
         },
@@ -324,9 +324,19 @@ pub fn run() {
                 material: Arc::new(Lambertian { albedo: vec3(0.3,0.3,0.3), emission: vec3(0.0,5.0,5.0), /*ray_sampler: alpha_sample as ImportanceSampler*/ }),
             }),
             Arc::new(Sphere {
-                center: vec3(0.8,0.5,2.0),
-                radius: 0.4,
+                center: vec3(1.0,0.5,2.0),
+                radius: 0.5,
                 material: Arc::new(Metal { albedo: vec3(0.7,0.7,0.7), glossiness: 0.2, }),
+            }),
+            Arc::new(Sphere {
+                center: vec3(0.2,0.4,2.0),
+                radius: 0.35,
+                material: Arc::new(Metal { albedo: vec3(0.7,0.7,0.7), glossiness: 0.6, }),
+            }),
+            Arc::new(Sphere {
+                center: vec3(0.52,0.23,2.5),
+                radius: 0.25,
+                material: Arc::new(Metal { albedo: vec3(0.7,0.7,0.7), glossiness: 0.0, }),
             }),
         ]),
         point_light_pos: vec3(0.0,1.0,5.0), // for phong shading only
