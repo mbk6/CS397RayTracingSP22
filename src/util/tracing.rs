@@ -7,23 +7,21 @@ use std::f32::consts::PI;
 ////////////////////////////////////////////////////////
 /////   INCLUDES
 ////////////////////////////////////////////////////////
-use std::{ops::Neg, iter::Scan};
 use image::*;
 use cgmath::*;
 use rand::Rng;
 use indicatif::{ProgressBar, ProgressStyle};
-use rayon::str::MatchIndices;
-use std::sync::mpsc;
 use std::sync::Arc;
-use crossbeam::thread;
 use rayon::prelude::*;
+
 use super::geometry::*;
+use super::materials::*;
 
 ////////////////////////////////////////////////////////
 /////   CONSTANTS, TYPEDEFS, ENUMS
 ////////////////////////////////////////////////////////
-type Vec3 = Vector3<f32>;
-type Color = Vec3;
+pub type Vec3 = Vector3<f32>;
+pub type Color = Vec3;
 type ImportanceSampler = fn(&RayHit) -> (Vec3, f32); // normal -> (sample direction, contribution)
 const TRACE_RECURSION_DEPTH: u32 = 100;
 const TRACE_SAMPLES: u32 = 1;
@@ -43,56 +41,20 @@ pub trait Intersectable {
     // returns the axis-aligned bounding box of the intersectable, if there is one
     fn bounding_box(&self) -> Option<AABB>; // Option because not all primitives have bounding boxes (e.g. plane)
 }
-
 ////////////////////////////////////////////////////////
 /////   UTILITY FUNCTIONS
 ////////////////////////////////////////////////////////
-
-// uniformly samples a hemisphere given by normal n
-pub fn sample_hemisphere(hit: &RayHit) -> (Vec3, f32) {
+pub fn reflect(v: &Vec3, n: &Vec3) -> Vec3 {
+    v - 2.0*v.dot(*n)*n
+}
+pub fn rand_sphere_vec() -> Vec3 {
     let mut rng = rand::thread_rng();
-    let mut dir;
-    // sample unrotated sphere
     loop {
-        dir = Vec3 { x: rng.gen_range(-1.0..1.0), y: rng.gen_range(-1.0..1.0), z: rng.gen_range(-1.0..1.0) }.normalize();
+        let dir = Vec3 { x: rng.gen_range(-1.0..1.0), y: rng.gen_range(-1.0..1.0), z: rng.gen_range(-1.0..1.0) }.normalize();
         if dir.magnitude2() <= 1.0 {
-            if dir.y < 0.0 { dir.y *= -1.0 };
-            dir = dir.normalize();
-            break;
+            return dir;
         }
     }
-    // rotate relative to given normal
-    let rotation = cgmath::Basis3::between_vectors(Vec3::unit_y(), hit.normal);
-    (rotation.rotate_vector(dir), 1.0/(2.0*PI))
-}
-
-// based on http://three-eyed-games.com/2018/05/12/gpu-path-tracing-in-unity-part-2/
-pub fn alpha_sample(hit: &RayHit) -> (Vec3, f32) {
-    let alpha = 1.0;
-    let mut rng = rand::thread_rng();
-    // pick random point on sphere sitting on xz plane
-    let cos_theta = f32::powf(rng.gen_range(0.0..1.0), 1.0/(alpha+1.0));
-    let sin_theta = f32::sqrt(f32::max(0.0, 1.0 - cos_theta*cos_theta));
-    let phi = 2.0*PI*rng.gen_range(0.0..1.0);
-    let vec = vec3(f32::cos(phi)*sin_theta, f32::sin(phi)*sin_theta, cos_theta);
-    
-    // rotate relative to given normal
-    let rotation = cgmath::Basis3::between_vectors(Vec3::unit_z(), hit.normal);
-    (rotation.rotate_vector(vec), (alpha+1.0)*f32::powf(cos_theta, alpha) / (2.0*PI))
-}
-
-// based on raytracing in one weekend
-pub fn rtow_sample(hit: &RayHit) -> (Vec3, f32) {
-    let mut rng = rand::thread_rng();
-    let mut dir;
-    // sample unrotated sphere
-    loop {
-        dir = Vec3 { x: rng.gen_range(-1.0..1.0), y: rng.gen_range(-1.0..1.0), z: rng.gen_range(-1.0..1.0) }.normalize();
-        if dir.magnitude2() <= 1.0 {
-            break;
-        }
-    }
-    (hit.hitpoint + hit.normal + dir, 1.0/(2.0*PI))
 }
 
 
@@ -100,34 +62,19 @@ pub fn rtow_sample(hit: &RayHit) -> (Vec3, f32) {
 /////   CLASSES
 ////////////////////////////////////////////////////////
 
-// RAY / RAYHIT / MATERIAL
+// RAY / RAYHIT
 pub struct Ray {
     pub origin: Vec3,
     pub direction: Vec3,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct RayHit {
     pub distance: f32,
     pub hitpoint: Vec3,
     pub normal: Vec3,
-    pub material: Material,
+    pub material: Arc<dyn Material + Send + Sync>,
 }
-#[derive(Clone, Copy)]
-pub struct Material {
-    pub albedo: Vec3,
-    pub emission: Vec3,
-    pub ray_sampler: ImportanceSampler,
-}
-impl Default for Material {
-    fn default() -> Material {
-        Material { 
-            albedo: vec3(1.0,1.0,1.0),
-            emission: Vec3::zero(),
-            ray_sampler: sample_hemisphere as ImportanceSampler,
-        }
-    }
 
-}
 
 // CAMERA
 #[derive(Debug, Clone)]
@@ -259,7 +206,7 @@ impl Scene {
                     Some(hit) => if hit.distance*hit.distance > (self.point_light_pos - hit.hitpoint).magnitude2() { 1.0 } else { 0.3 }
                 };
                 
-                shadow_weight * (self.ambient + diffuse_weight*hit.material.albedo + specular_weight*vec3(0.4, 0.4, 0.4))
+                shadow_weight * (self.ambient + diffuse_weight*hit.material.scatter(&hit, ray).1 + specular_weight*vec3(0.4, 0.4, 0.4))
             }
         }
     }
@@ -277,11 +224,8 @@ impl Scene {
                 let mut integral = Color::zero();
                 for _i in 0..TRACE_SAMPLES {
                     // pick new direction, generate ray, and recurse
-                    let (new_dir, pdf) = (hit.material.ray_sampler)(&hit);
-                    let new_ray = Ray { origin: hit.hitpoint, direction: new_dir };
-                    
-                    let brdf_term = hit.material.albedo / PI; // for now just using the lambersion brdf
-                    let dot_term = new_dir.dot(hit.normal).clamp(0.0,1.0);
+                    let (new_ray, brdf_term, pdf) = hit.material.scatter(&hit, ray);
+                    let dot_term = new_ray.direction.dot(hit.normal).clamp(0.0,1.0);
                     let incoming_light = self.shade_ray(&new_ray, depth+1);
                     // accumulate into integral
                     integral += (dot_term*(brdf_term.mul_element_wise(incoming_light))) / pdf;
@@ -289,7 +233,7 @@ impl Scene {
                 integral /= TRACE_SAMPLES as f32; 
         
                 // total light = integrated + emitted light
-                hit.material.emission + integral
+                hit.material.emission() + integral
             }
         }        
     }
@@ -335,17 +279,17 @@ pub fn run() {
             projection_mode: CameraProjectionMode::Perspective,
             screen_width: 400,
             screen_height: 400,
-            aa_sample_count: 100,
+            aa_sample_count: 1000,
             max_trace_dist: 100000.0,
             gamma: 1.0,
         },
         objects: Arc::new(vec![
 
-            Arc::new(StaticMesh::load_from_file("./obj/teapot.obj")),
+            Arc::new(StaticMesh::load_from_file("./obj/teapot.obj", Arc::new(Lambertian { albedo: vec3(0.5,0.0,0.5), ..Default::default() }),)),
             Arc::new(Plane {
                 point: vec3(0.0, 0.0, 0.0),
                 normal: Vec3::unit_y(),
-                material: Material { albedo: vec3(0.4,0.4,0.4), ray_sampler: alpha_sample as ImportanceSampler, ..Default::default() },
+                material: Arc::new(Lambertian { albedo: vec3(0.4,0.4,0.4), /*ray_sampler: alpha_sample as ImportanceSampler,*/ ..Default::default() }),
             }),
             // Arc::new(Plane {
             //     point: vec3(0.0, 0.0, -4.0),
@@ -376,8 +320,13 @@ pub fn run() {
             
             Arc::new(Sphere {
                 center: vec3(-0.8,0.5,2.0),
+                radius: 0.3,
+                material: Arc::new(Lambertian { albedo: vec3(0.3,0.3,0.3), emission: vec3(0.0,5.0,5.0), /*ray_sampler: alpha_sample as ImportanceSampler*/ }),
+            }),
+            Arc::new(Sphere {
+                center: vec3(0.8,0.5,2.0),
                 radius: 0.4,
-                material: Material { albedo: vec3(0.3,0.3,0.3), emission: vec3(5.0,0.0,5.0), ray_sampler: alpha_sample as ImportanceSampler },
+                material: Arc::new(Metal { albedo: vec3(0.7,0.7,0.7), glossiness: 0.2, }),
             }),
         ]),
         point_light_pos: vec3(0.0,1.0,5.0), // for phong shading only

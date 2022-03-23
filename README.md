@@ -45,5 +45,8 @@ Michael Korenchan | Computer Science | Univesity of Illinois
   - Spent a ton of time trying to get code running on GPU and couldn't get it working
 - **Week of Mar 12**
   - Played around with different directional sampling functions
-  - Adjusted shading model
+  - Adjusted shading model to be more efficient
   - Lambertian surfaces look decent now
+  - Refactored material struct into an abstract trait
+  - Added simple metal material with variable glossiness
+  - Emissive objects are looking okay - need to start thinking about HDR

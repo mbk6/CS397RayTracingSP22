@@ -7,8 +7,7 @@ use std::mem;
 use rand::Rng;
 
 use super::tracing::*;
-
-type Vec3 = Vector3<f32>;
+use super::materials::*;
 
 
 ////////////////////////////////////////////////////////
@@ -68,7 +67,7 @@ impl Intersectable for AABB {
             distance: 0.0,
             hitpoint: Vec3::zero(),
             normal: Vec3::zero(),
-            material: Material::default(),
+            material: Arc::new(Lambertian::default()),
         })
     }
     fn bounding_box(&self) -> Option<AABB> {
@@ -100,13 +99,13 @@ impl Intersectable for BVHNode {
                 if let Some(left_node) = &self.left {
                     let hit_opt = left_node.intersect_ray(ray, t_min, t_max);
                     if let Some(hit) = hit_opt { 
-                        best_hit = hit_opt;
+                        best_hit = Some(hit.clone());
                         best_t = hit.distance;
                     }
                 }
                 if let Some(right_node) = &self.right {
                     let hit_opt = right_node.intersect_ray(ray, t_min, best_t);
-                    if hit_opt.is_some() { best_hit = hit_opt; }
+                    if hit_opt.is_some() { best_hit = hit_opt.clone(); }
                 }
             }
             // ray misses this node entirely
@@ -122,14 +121,14 @@ impl Intersectable for BVHNode {
 #[derive(Clone)]
 pub struct StaticMesh {
     mesh: Arc<Mesh>,
-    material: Material, // materials to be implemented soon - right now just albedo
+    material: Arc<dyn Material + Send + Sync>,
     transform: Matrix4<f32>, // transforms to be implemented soon
     bvh_root: Option<Box<BVHNode>>,
 }
 impl StaticMesh {
     
     // load a mesh from file to create a new StaticMesh object
-    pub fn load_from_file(file_name: &str) -> StaticMesh {
+    pub fn load_from_file(file_name: &str, material: Arc<dyn Material + Sync + Send>) -> StaticMesh {
         // load obj
         let obj = tobj::load_obj(
             file_name,
@@ -151,7 +150,7 @@ impl StaticMesh {
         let mut sm = StaticMesh { 
             mesh: Arc::new(models.remove(0).mesh),
             bvh_root: None,
-            material: Material { albedo: vec3(0.2,0.0,0.5), ..Default::default() },
+            material: material.clone(),
             transform: Matrix4::zero(),
         };
         //sm.compute_normals();
@@ -221,7 +220,7 @@ impl Intersectable for StaticMesh {
         // intersect bvh but replace material data
         if let Some(root) = &self.bvh_root {
             if let Some(mut hit) = root.intersect_ray(ray, t_min, t_max) {
-                hit.material = self.material;
+                hit.material = self.material.clone();
                 return Some(hit);
             }
         }
@@ -267,7 +266,7 @@ impl Intersectable for IndexedTriangle {
             distance: t,
             hitpoint: hitpoint,
             normal: e1.cross(e2).normalize(),
-            material: Material::default(), // doesn't matter, since we use the material of the mesh this belongs to
+            material: Arc::new(Lambertian::default()), // doesn't matter, since we use the material of the mesh this belongs to
         })
     }
     fn bounding_box(&self) -> Option<AABB> {
@@ -295,7 +294,7 @@ impl Intersectable for IndexedTriangle {
 pub struct Sphere {
     pub center: Vec3,
     pub radius: f32,
-    pub material: Material,
+    pub material: Arc<dyn Material + Send + Sync>,
 }
 impl Intersectable for Sphere {
     fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
@@ -316,7 +315,7 @@ impl Intersectable for Sphere {
                 distance: t,
                 hitpoint: hitpoint,
                 normal: (hitpoint - self.center).normalize(),
-                material: self.material,
+                material: self.material.clone(),
             })
         }
     }
@@ -329,12 +328,12 @@ impl Intersectable for Sphere {
 }
 
 // TRIANGLE
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct Triangle {
     pub a: Vec3,
     pub b: Vec3,
     pub c: Vec3,
-    pub material: Material,
+    pub material: Arc<dyn Material + Send + Sync>,
 }
 impl Intersectable for Triangle {
     fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
@@ -359,7 +358,7 @@ impl Intersectable for Triangle {
             distance: t,
             hitpoint: hitpoint,
             normal: e1.cross(e2).normalize(),
-            material: self.material,
+            material: self.material.clone(),
         })
     }
     fn bounding_box(&self) -> Option<AABB> {
@@ -382,7 +381,7 @@ impl Intersectable for Triangle {
 pub struct Plane {
     pub point: Vec3,
     pub normal: Vec3,
-    pub material: Material,
+    pub material: Arc<dyn Material + Send + Sync>,
 }
 impl Intersectable for Plane {
     fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
@@ -402,7 +401,7 @@ impl Intersectable for Plane {
                 distance: t,
                 hitpoint: hitpoint,
                 normal: n,
-                material: self.material,
+                material: self.material.clone(),
             })
         }
     }
