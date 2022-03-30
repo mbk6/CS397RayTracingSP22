@@ -68,6 +68,40 @@ impl Material for Metal {
     }
 }
 
+// DIELECTRIC
+pub struct Dielectric {
+    pub idx_of_refraction: f32,
+    // pub color: Vec3, 
+}
+impl Material for Dielectric {
+    fn scatter(&self, hit: &RayHit, ray: &Ray) -> (Ray, Color, f32) {
+        // index of refraction ratio depends on whether we're entering or leaving the object
+        let eta = if hit.frontface {1.0/self.idx_of_refraction} else {self.idx_of_refraction};
+        let critical_angle = eta*f32::sqrt(1.0-f32::min(-ray.direction.dot(hit.normal), 1.0).powi(2)) > 1.0;
+        let fresnel_factor = fresnel(&ray.direction, &hit.normal, self.idx_of_refraction);
+        // if angle is less than critical, then refract with probability according to fresnel coefficient (proportion of reflected/transmitted light)
+        let will_refract = rand::thread_rng().gen_range(0.0..1.0) >= fresnel_factor;
+        let new_dir = if will_refract {
+            refract(&ray.direction, &hit.normal, eta)
+        }
+        else {
+            reflect(&ray.direction, &hit.normal)
+        };
+        
+        (
+            Ray {
+                origin: hit.hitpoint,
+                direction: new_dir
+            },
+            //if hit.frontface && !will_refract { vec3(1.0,1.0,1.0) } else { clampvec(self.color*hit.distance, 0.0, 1.0) } ,
+            vec3(1.0,1.0,1.0),
+            1.0
+        )
+    }
+    fn emission(&self) -> Color {
+        Vec3::zero()
+    }
+}
 
 
 // SAMPLING FUNCTIONS

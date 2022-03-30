@@ -43,10 +43,13 @@ Michael Korenchan | Computer Science | Univesity of Illinois
   - Added Cornell Box
 - **Week of Mar 14 (Spring Break)**
   - Spent a ton of time trying to get code running on GPU and couldn't get it working
-- **Week of Mar 12**
+- **Week of Mar 21**
   - Played around with different directional sampling functions
   - Adjusted shading model to be more efficient
   - Lambertian surfaces look decent now
   - Refactored material struct into an abstract trait
   - Added simple metal material with variable glossiness
   - Emissive objects are looking okay - need to start thinking about HDR
+- **Week of Mar 28**
+  - Added dielectric materials
+  - Now rendering Cornell box with various metal/glass/emissive/lambertian surfaces

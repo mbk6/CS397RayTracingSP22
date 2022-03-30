@@ -64,6 +64,7 @@ impl Intersectable for AABB {
             }
         }
         return Some(RayHit {
+            frontface: true,
             distance: 0.0,
             hitpoint: Vec3::zero(),
             normal: Vec3::zero(),
@@ -262,12 +263,8 @@ impl Intersectable for IndexedTriangle {
         let t = f*e2.dot(r);
         let hitpoint = ray.origin + t*ray.direction;
         if t < t_min || t > t_max { return None }
-        return Some(RayHit {
-            distance: t,
-            hitpoint: hitpoint,
-            normal: e1.cross(e2).normalize(),
-            material: Arc::new(Lambertian::default()), // doesn't matter, since we use the material of the mesh this belongs to
-        })
+        
+        Some(RayHit::new(t, e1.cross(e2).normalize(), Arc::new(Lambertian::default()), ray))
     }
     fn bounding_box(&self) -> Option<AABB> {
         let (a,b,c) = StaticMesh::get_triangle_from_mesh(&self.mesh, self.idx);
@@ -305,18 +302,13 @@ impl Intersectable for Sphere {
         let c = f.magnitude2() - self.radius*self.radius;
         let d = b*b - 4.0*a*c;
         if d < 0.0 {
-            return None;
+            None
         }
         else {
             let t = (-b - d.sqrt()) / (2.0*a);
             let hitpoint = ray.origin + t*ray.direction;
             if t < t_min || t > t_max { return None }
-            return Some(RayHit {
-                distance: t,
-                hitpoint: hitpoint,
-                normal: (hitpoint - self.center).normalize(),
-                material: self.material.clone(),
-            })
+            Some(RayHit::new(t, (hitpoint - self.center).normalize(), self.material.clone(), ray))
         }
     }
     fn bounding_box(&self) -> Option<AABB> {
@@ -354,12 +346,8 @@ impl Intersectable for Triangle {
         let t = f*e2.dot(r);
         let hitpoint = ray.origin + t*ray.direction;
         if t < t_min || t > t_max { return None }
-        return Some(RayHit {
-            distance: t,
-            hitpoint: hitpoint,
-            normal: e1.cross(e2).normalize(),
-            material: self.material.clone(),
-        })
+
+        Some(RayHit::new(t, e1.cross(e2).normalize(), self.material.clone(), ray))
     }
     fn bounding_box(&self) -> Option<AABB> {
         Some(AABB {
@@ -391,18 +379,14 @@ impl Intersectable for Plane {
         let n = origin_dist.signum() * self.normal;
         let d = ray.direction.dot(n);
         if d >= 0.0 { 
-            return None;
+            None
         }
         else {
             let t = origin_dist.abs() / d.abs();
             if t < t_min || t > t_max { return None }
             let hitpoint = ray.origin + t*ray.direction;
-            return Some(RayHit {
-                distance: t,
-                hitpoint: hitpoint,
-                normal: n,
-                material: self.material.clone(),
-            })
+
+            Some(RayHit::new(t, n, self.material.clone(), ray))
         }
     }
     fn bounding_box(&self) -> Option<AABB> {

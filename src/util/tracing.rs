@@ -4,6 +4,7 @@
 
 
 use std::f32::consts::PI;
+use std::ops::Neg;
 ////////////////////////////////////////////////////////
 /////   INCLUDES
 ////////////////////////////////////////////////////////
@@ -23,7 +24,7 @@ use super::materials::*;
 pub type Vec3 = Vector3<f32>;
 pub type Color = Vec3;
 type ImportanceSampler = fn(&RayHit) -> (Vec3, f32); // normal -> (sample direction, contribution)
-const TRACE_RECURSION_DEPTH: u32 = 100;
+const TRACE_RECURSION_DEPTH: u32 = 25;
 const TRACE_SAMPLES: u32 = 1;
 
 #[derive(Debug, Clone, Copy)]
@@ -47,6 +48,25 @@ pub trait Intersectable {
 pub fn reflect(v: &Vec3, n: &Vec3) -> Vec3 {
     v - 2.0*v.dot(*n)*n
 }
+// Approximates the fresnel reflection-transmission coefficient using Schlick's approximation (https://en.wikipedia.org/wiki/Schlick%27s_approximation)
+pub fn fresnel(v: &Vec3, n: &Vec3, ir: f32) -> f32 {
+    // (first index of refraction is assumed to be air (1.0). the equation is symmetric so it doesn't matter which medium is first)
+    let r0 = ((ir-1.0)/(ir+1.0)).powi(2);
+    r0 + (1.0-r0)*(1.0-v.dot(*n).abs()).powi(5)
+}
+// GLSL refract function
+// pub fn refract(v: &Vec3, n: &Vec3, eta: f32) -> Vec3 {
+//     let k = 1.0 - eta * eta * (1.0 - v.dot(*n)*v.dot(*n));
+//     if k < 0.0 { Vec3::zero() } else { eta*v - (eta*v.dot(*n) + f32::sqrt(k))*n }
+// }
+// Raytracing in one weekend refract function:
+pub fn refract(v: &Vec3, n: &Vec3, eta: f32) -> Vec3 {
+    let cos_theta = f32::min((v.neg()).dot(*n), 1.0);
+    let r_out_perp =  eta * (v + cos_theta*n);
+    let r_out_parallel = -f32::sqrt((1.0 - r_out_perp.magnitude2()).abs()) * n;
+    return r_out_perp + r_out_parallel;
+}
+// random vector in a unit sphere
 pub fn rand_sphere_vec() -> Vec3 {
     let mut rng = rand::thread_rng();
     loop {
@@ -55,6 +75,9 @@ pub fn rand_sphere_vec() -> Vec3 {
             return dir;
         }
     }
+}
+pub fn clampvec(v: Vec3, min: f32, max: f32) -> Vec3 {
+    vec3(v.x.clamp(min, max), v.y.clamp(min, max), v.z.clamp(min, max))
 }
 
 
@@ -73,6 +96,19 @@ pub struct RayHit {
     pub hitpoint: Vec3,
     pub normal: Vec3,
     pub material: Arc<dyn Material + Send + Sync>,
+    pub frontface: bool,
+}
+impl RayHit {
+    pub fn new(distance: f32, normal: Vec3, material: Arc<dyn Material + Send + Sync>, ray: &Ray) -> RayHit {
+        let frontface = normal.dot(ray.direction) < 0.0;
+        RayHit { 
+            distance: distance,
+            hitpoint: ray.origin+ray.direction*distance,
+            normal: if frontface {normal} else {-normal},
+            material: material,
+            frontface: frontface
+        }
+    }
 }
 
 
@@ -169,6 +205,17 @@ impl Scene {
                     // final_color += self.phong_shade_ray(&cam_rays[sample_idx]);
                 }
                 final_color = final_color / cam_rays.len() as f32;
+                
+                let tmp = final_color.clone();
+                for i in 0..3 {
+                    let d = tmp[i] - 1.0;
+                    if d > 0.0 {
+                        final_color[(i+1)%3] += d;
+                        final_color[(i+2)%3] += d;
+                    }
+                }
+
+
                 *(data[3*x])   = (f32::powf(final_color.x.clamp(0.0,1.0), 1.0/self.camera.gamma) * 255.9999) as u8;
                 *(data[3*x+1]) = (f32::powf(final_color.y.clamp(0.0,1.0), 1.0/self.camera.gamma) * 255.9999) as u8;
                 *(data[3*x+2]) = (f32::powf(final_color.z.clamp(0.0,1.0), 1.0/self.camera.gamma) * 255.9999) as u8;
@@ -225,7 +272,7 @@ impl Scene {
                 for _i in 0..TRACE_SAMPLES {
                     // pick new direction, generate ray, and recurse
                     let (new_ray, brdf_term, pdf) = hit.material.scatter(&hit, ray);
-                    let dot_term = new_ray.direction.dot(hit.normal).clamp(0.0,1.0);
+                    let dot_term = new_ray.direction.dot(hit.normal).abs().clamp(0.0,1.0);
                     let incoming_light = self.shade_ray(&new_ray, depth+1);
                     // accumulate into integral
                     integral += (dot_term*(brdf_term.mul_element_wise(incoming_light))) / pdf;
@@ -272,7 +319,7 @@ pub fn run() {
     // initialize scene
     let scene = Scene {
         camera: Camera {
-            eyepoint: vec3(0.0, 2.0, 5.0),
+            eyepoint: vec3(0.0, 2.0, 5.5),
             view_dir: -Vec3::unit_z(),
             up: Vec3::unit_y(),
             focal_length: 0.6,
@@ -280,64 +327,104 @@ pub fn run() {
             screen_width: 400,
             screen_height: 400,
             aa_sample_count: 2000,
-            max_trace_dist: 100000.0,
-            gamma: 1.0,
+            max_trace_dist: 100.0,
+            gamma: 2.0,
         },
         objects: Arc::new(vec![
-
-            Arc::new(StaticMesh::load_from_file("./obj/teapot.obj", Arc::new(Lambertian { albedo: vec3(0.5,0.0,0.5), ..Default::default() }),)),
             Arc::new(Plane {
                 point: vec3(0.0, 0.0, 0.0),
                 normal: Vec3::unit_y(),
                 material: Arc::new(Lambertian { albedo: vec3(0.4,0.4,0.4), /*ray_sampler: alpha_sample as ImportanceSampler,*/ ..Default::default() }),
-            }),
-            // Arc::new(Plane {
-            //     point: vec3(0.0, 0.0, -4.0),
-            //     normal: Vec3::unit_z(),
-            //     material: Material { albedo: vec3(0.6,0.6,0.6), ray_sampler: sample_hemisphere as ImportanceSampler, ..Default::default() },
-            // }),
-            // Arc::new(Plane {
-            //     point: vec3(0.0, 5.0, 0.0),
-            //     normal: -Vec3::unit_y(),
-            //     material: Material { albedo: vec3(0.6,0.6,0.6), ray_sampler: sample_hemisphere as ImportanceSampler, ..Default::default() },
-            // }),
-            // Arc::new(Plane {
-            //     point: vec3(-5.0, 0.0, 0.0),
-            //     normal: Vec3::unit_x(),
-            //     material: Material { albedo: vec3(0.6,0.0,0.0), ray_sampler: sample_hemisphere as ImportanceSampler, ..Default::default() },
-            // }),
-            // Arc::new(Plane {
-            //     point: vec3(5.0, 0.0, 0.0),
-            //     normal: -Vec3::unit_x(),
-            //     material: Material { albedo: vec3(0.0,0.6,0.0), ray_sampler: sample_hemisphere as ImportanceSampler, ..Default::default() },
-            // }),
-            // Arc::new(Sphere {
-            //     center: vec3(0.0,6.0,-1.0),
-            //     radius: 1.6,
-            //     material: Material { albedo: vec3(0.6,0.3,0.3), emission: vec3(10.0,10.0,10.0), ray_sampler: sample_hemisphere as ImportanceSampler },
-            // }),
-
-            
+            }),  
+            Arc::new(StaticMesh::load_from_file(
+                "./obj/teapot.obj",
+                Arc::new(Lambertian { albedo: vec3(0.5,0.0,0.5), ..Default::default() }),
+                //Arc::new(Dielectric { idx_of_refraction: 1.2 })
+            )),          
             Arc::new(Sphere {
-                center: vec3(-0.8,0.5,2.0),
-                radius: 0.3,
-                material: Arc::new(Lambertian { albedo: vec3(0.3,0.3,0.3), emission: vec3(0.0,5.0,5.0), /*ray_sampler: alpha_sample as ImportanceSampler*/ }),
+                center: vec3(-1.3,0.5,2.0),
+                radius: 0.5,
+                material: Arc::new(Dielectric { idx_of_refraction: 2.5 })
+            }),
+            Arc::new(Sphere {
+                center: vec3(-2.7,3.8,-2.0),
+                radius: 1.0,
+                material: Arc::new(Metal { albedo: vec3(1.0,1.0,0.3), glossiness: 0.2 })
+            }),
+            Arc::new(Sphere {
+                center: vec3(2.7,3.8,-2.0),
+                radius: 1.0,
+                material: Arc::new(Metal { albedo: vec3(1.0,1.0,1.0), glossiness: 0.6 })
             }),
             Arc::new(Sphere {
                 center: vec3(1.0,0.5,2.0),
                 radius: 0.5,
-                material: Arc::new(Metal { albedo: vec3(0.7,0.7,0.7), glossiness: 0.2, }),
+                // material: Arc::new(Metal { albedo: vec3(0.7,0.7,0.7), glossiness: 0.2, }),
+                material: Arc::new(Dielectric { idx_of_refraction: 1.7 })
             }),
             Arc::new(Sphere {
                 center: vec3(0.2,0.4,2.0),
                 radius: 0.35,
-                material: Arc::new(Metal { albedo: vec3(0.7,0.7,0.7), glossiness: 0.6, }),
+                material: Arc::new(Lambertian { albedo: vec3(0.3,0.3,0.3), emission: vec3(0.0,1.0,1.0),}),
             }),
             Arc::new(Sphere {
                 center: vec3(0.52,0.23,2.5),
                 radius: 0.25,
-                material: Arc::new(Metal { albedo: vec3(0.7,0.7,0.7), glossiness: 0.0, }),
+                material: Arc::new(Dielectric { idx_of_refraction: 2.5 })
             }),
+            Arc::new(Sphere {
+                center: vec3(-0.42,0.5,2.5),
+                radius: 0.5,
+                material: Arc::new(Dielectric { idx_of_refraction: 1.4})
+            }),
+
+            // Arc::new(Sphere {
+            //     center: vec3(0.0,3.0,-2.5),
+            //     radius: 3.0,
+            //     //material: Arc::new(Metal { albedo: vec3(1.0,1.0,1.0), glossiness: 0.0, }),
+            //     material: Arc::new(Dielectric { idx_of_refraction: 1.5 }),
+            // }),
+
+
+
+             Arc::new(Plane {
+                point: vec3(0.0, 0.0, -4.0),
+                normal: Vec3::unit_z(),
+                material: Arc::new(Lambertian { albedo: vec3(0.6,0.6,0.6), ..Default::default() }),
+            }),
+            Arc::new(Plane {
+                point: vec3(0.0, 5.0, 0.0),
+                normal: -Vec3::unit_y(),
+                material: Arc::new(Lambertian { albedo: vec3(0.6,0.6,0.6), ..Default::default() }),
+            }),
+            Arc::new(Plane {
+                point: vec3(-4.0, 0.0, 0.0),
+                normal: Vec3::unit_x(),
+                material: Arc::new(Lambertian { albedo: vec3(0.6,0.0,0.0), ..Default::default() }),
+            }),
+            Arc::new(Plane {
+                point: vec3(4.0, 0.0, 0.0),
+                normal: -Vec3::unit_x(),
+                material: Arc::new(Lambertian { albedo: vec3(0.0,0.6,0.0), ..Default::default() }),
+            }),
+            Arc::new(Triangle {
+                a: vec3(-2.0, 4.95, -1.0),
+                b: vec3(2.0, 4.95,  -1.0),
+                c: vec3(2.0, 4.95, 2.0),
+                material: Arc::new(Lambertian { albedo: vec3(0.0,0.6,0.0), emission: vec3(2.0,2.0,2.0), ..Default::default() }),
+            }),
+            Arc::new(Triangle {
+                a: vec3(-2.0, 4.95, -1.0),
+                b: vec3(-2.0, 4.95,  2.0),
+                c: vec3(2.0, 4.95, 2.0),
+                material: Arc::new(Lambertian { albedo: vec3(0.0,0.6,0.0), emission: vec3(2.0,2.0,2.0), ..Default::default() }),
+            }),
+            // Arc::new(Sphere {
+            //     center: vec3(0.0,6.0,-1.0),
+            //     radius: 1.6,
+            //     material: Arc::new(Lambertian { albedo: vec3(0.6,0.3,0.3), emission: vec3(5.0,5.0,5.0) }),
+            // }),
+
         ]),
         point_light_pos: vec3(0.0,1.0,5.0), // for phong shading only
         ambient: vec3(0.1,0.1,0.1), // for phong shading only
