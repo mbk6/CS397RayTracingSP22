@@ -66,11 +66,21 @@ pub fn refract(v: &Vec3, n: &Vec3, eta: f32) -> Vec3 {
     let r_out_parallel = -f32::sqrt((1.0 - r_out_perp.magnitude2()).abs()) * n;
     return r_out_perp + r_out_parallel;
 }
-// random vector in a unit sphere
+// random vector in a unit sphere (rejection method)
 pub fn rand_sphere_vec() -> Vec3 {
     let mut rng = rand::thread_rng();
     loop {
-        let dir = Vec3 { x: rng.gen_range(-1.0..1.0), y: rng.gen_range(-1.0..1.0), z: rng.gen_range(-1.0..1.0) }.normalize();
+        let dir = Vec3 { x: rng.gen_range(-1.0..1.0), y: rng.gen_range(-1.0..1.0), z: rng.gen_range(-1.0..1.0) };
+        if dir.magnitude2() <= 1.0 {
+            return dir;
+        }
+    }
+}
+// random vector in a unit disk in xy plane (rejection method)
+pub fn rand_disk_vec() -> Vec3 {
+    let mut rng = rand::thread_rng();
+    loop {
+        let dir = Vec3 { x: rng.gen_range(-1.0..1.0), y: rng.gen_range(-1.0..1.0), z: 0.0 };
         if dir.magnitude2() <= 1.0 {
             return dir;
         }
@@ -119,10 +129,12 @@ pub struct Camera {
     pub eyepoint: Vec3,
     pub view_dir: Vec3,
     pub up: Vec3,
-    pub focal_length: f32,
     pub projection_mode: CameraProjectionMode,
     pub screen_width: u32,
     pub screen_height: u32,
+    pub focal_length: f32,
+    //pub focus_dist: f32,
+    //pub lens_radius: f32,
     pub aa_sample_count: u32, // Must be a perfect square
     pub max_trace_dist: f32,
     pub gamma: f32,
@@ -326,7 +338,7 @@ pub fn run() {
             projection_mode: CameraProjectionMode::Perspective,
             screen_width: 800,
             screen_height: 800,
-            aa_sample_count: 2000,
+            aa_sample_count: 4000,
             max_trace_dist: 100.0,
             gamma: 2.0,
         },
@@ -349,7 +361,7 @@ pub fn run() {
             Arc::new(Sphere {
                 center: vec3(-2.7,3.8,-2.0),
                 radius: 1.0,
-                material: Arc::new(Metal { albedo: vec3(1.0,1.0,0.3), glossiness: 0.2 })
+                material: Arc::new(Metal { albedo: vec3(1.0,1.0,0.3), glossiness: 0.0 })
             }),
             Arc::new(Sphere {
                 center: vec3(2.7,3.8,-2.0),
@@ -363,19 +375,19 @@ pub fn run() {
                 material: Arc::new(Dielectric { idx_of_refraction: 1.7 })
             }),
             Arc::new(Sphere {
-                center: vec3(0.2,0.4,2.0),
+                center: vec3(0.2,0.35,2.0),
                 radius: 0.35,
                 material: Arc::new(Lambertian { albedo: vec3(0.3,0.3,0.3), emission: vec3(0.0,1.0,1.0),}),
             }),
             Arc::new(Sphere {
                 center: vec3(0.52,0.23,2.5),
-                radius: 0.25,
+                radius: 0.23,
                 material: Arc::new(Dielectric { idx_of_refraction: 2.5 })
             }),
             Arc::new(Sphere {
                 center: vec3(-0.42,0.5,2.5),
                 radius: 0.5,
-                material: Arc::new(Dielectric { idx_of_refraction: 1.4})
+                material: Arc::new(Dielectric { idx_of_refraction: 2.1})
             }),
 
             // Arc::new(Sphere {
