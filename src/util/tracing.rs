@@ -24,13 +24,16 @@ use super::materials::*;
 pub type Vec3 = Vector3<f32>;
 pub type Color = Vec3;
 type ImportanceSampler = fn(&RayHit) -> (Vec3, f32); // normal -> (sample direction, contribution)
-const TRACE_RECURSION_DEPTH: u32 = 25;
-const TRACE_SAMPLES: u32 = 1;
 
 #[derive(Debug, Clone, Copy)]
 pub enum CameraProjectionMode {
     Orthographic,
     Perspective,
+}
+#[derive(Debug, Clone, Copy)]
+pub enum ShadingMode {
+    Phong,
+    PathTrace,
 }
 
 ////////////////////////////////////////////////////////
@@ -130,11 +133,14 @@ pub struct Camera {
     pub view_dir: Vec3,
     pub up: Vec3,
     pub projection_mode: CameraProjectionMode,
+    pub shading_mode: ShadingMode,
+    pub path_depth: u32,
+    pub path_samples: u32,
     pub screen_width: u32,
     pub screen_height: u32,
     pub focal_length: f32,
-    //pub focus_dist: f32,
-    //pub lens_radius: f32,
+    pub focus_dist: f32,
+    pub lens_radius: f32,
     pub aa_sample_count: u32, // Must be a perfect square
     pub max_trace_dist: f32,
     pub gamma: f32,
@@ -164,27 +170,30 @@ impl Camera {
                 pixel_size*(screen_x as f32 - 0.5*(self.screen_width as f32) + 0.5) + subpixel_offset.x,
                 pixel_size*(0.5 + 0.5*(self.screen_height as f32) - screen_y as f32) + subpixel_offset.y,
                 -self.focal_length
-            ).normalize();
+            );
+            let focus_plane_pixel_center = cam_space_pixel_center.normalize()*self.focus_dist;
+            let lens_origin = self.lens_radius*rand_disk_vec();
 
-            // create ray with direction still in camera space
-            let mut ray = Ray {
-                origin: match self.projection_mode {
-                    CameraProjectionMode::Orthographic => vec3(cam_space_pixel_center.x, cam_space_pixel_center.y, 0.0 ),
-                    CameraProjectionMode::Perspective => self.eyepoint,
-                },
-                direction: match self.projection_mode {
-                    CameraProjectionMode::Orthographic => self.view_dir,
-                    CameraProjectionMode::Perspective => cam_space_pixel_center
-                },
-            };
-
-            // rotate ray direction to world space
+            // find rotation from camera to world space:
             let rotation = Matrix3::from_cols(
                 self.view_dir.cross(self.up).normalize(),
                 self.up,
                 -self.view_dir
             );
+           
+            // create ray with direction still in camera space
+            let mut ray = Ray {
+                origin: match self.projection_mode {
+                    CameraProjectionMode::Orthographic => vec3(cam_space_pixel_center.x, cam_space_pixel_center.y, 0.0 ),
+                    CameraProjectionMode::Perspective => self.eyepoint + rotation*lens_origin,
+                },
+                direction: match self.projection_mode {
+                    CameraProjectionMode::Orthographic => self.view_dir,
+                    CameraProjectionMode::Perspective => (focus_plane_pixel_center - lens_origin).normalize()
+                },
+            };
             ray.direction = rotation * ray.direction;
+
             rays.push(ray);
         }
         return rays;
@@ -213,8 +222,12 @@ impl Scene {
                 let cam_rays = self.camera.generate_rays(x as u32, y as u32);
                 let mut final_color = Vec3::zero();
                 for sample_idx in 0..cam_rays.len() {
-                    final_color += self.shade_ray(&cam_rays[sample_idx], 0);
-                    // final_color += self.phong_shade_ray(&cam_rays[sample_idx]);
+                    if matches!(self.camera.shading_mode, ShadingMode::Phong) {
+                        final_color += self.phong_shade_ray(&cam_rays[sample_idx]);
+                    }
+                    else {
+                        final_color += self.shade_ray(&cam_rays[sample_idx], 0);
+                    }
                 }
                 final_color = final_color / cam_rays.len() as f32;
                 
@@ -272,7 +285,7 @@ impl Scene {
     
     // computes shading for a ray hit according to the monte-carlo integrated rendering equation
     fn shade_ray(&self, ray: &Ray, depth: u32) -> Color {
-        if depth >= TRACE_RECURSION_DEPTH { 
+        if depth >= self.camera.path_depth { 
             return 0.3*Scene::background_color(&ray.direction); // ambient light model 
         }
         // get hit
@@ -281,7 +294,7 @@ impl Scene {
             Some(hit) => {
                 // accumulate integral
                 let mut integral = Color::zero();
-                for _i in 0..TRACE_SAMPLES {
+                for _i in 0..self.camera.path_samples {
                     // pick new direction, generate ray, and recurse
                     let (new_ray, brdf_term, pdf) = hit.material.scatter(&hit, ray);
                     let dot_term = new_ray.direction.dot(hit.normal).abs().clamp(0.0,1.0);
@@ -289,7 +302,7 @@ impl Scene {
                     // accumulate into integral
                     integral += (dot_term*(brdf_term.mul_element_wise(incoming_light))) / pdf;
                 }
-                integral /= TRACE_SAMPLES as f32; 
+                integral /= self.camera.path_samples as f32; 
         
                 // total light = integrated + emitted light
                 hit.material.emission() + integral
@@ -334,11 +347,16 @@ pub fn run() {
             eyepoint: vec3(0.0, 2.0, 5.5),
             view_dir: -Vec3::unit_z(),
             up: Vec3::unit_y(),
-            focal_length: 0.6,
+            focal_length: 0.6,  // distance from eyepoint to image plane
+            focus_dist: 5.0,    // distance from eyepoint to focus plane
+            lens_radius: 0.1,   // radius of thin-lens approximation
             projection_mode: CameraProjectionMode::Perspective,
-            screen_width: 800,
-            screen_height: 800,
-            aa_sample_count: 4000,
+            shading_mode: ShadingMode::PathTrace,
+            path_depth: 25,     // path-tracing recursion depth
+            path_samples: 1,    // sub-rays cast per recursion (slow if more than 1)
+            screen_width: 400,
+            screen_height: 400,
+            aa_sample_count: 100,
             max_trace_dist: 100.0,
             gamma: 2.0,
         },
@@ -366,7 +384,7 @@ pub fn run() {
             Arc::new(Sphere {
                 center: vec3(2.7,3.8,-2.0),
                 radius: 1.0,
-                material: Arc::new(Metal { albedo: vec3(1.0,1.0,1.0), glossiness: 0.6 })
+                material: Arc::new(Metal { albedo: vec3(1.0,1.0,1.0), glossiness: 0.4 })
             }),
             Arc::new(Sphere {
                 center: vec3(1.0,0.5,2.0),
