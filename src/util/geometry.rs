@@ -123,13 +123,14 @@ impl Intersectable for BVHNode {
 pub struct StaticMesh {
     mesh: Arc<Mesh>,
     material: Arc<dyn Material + Send + Sync>,
-    transform: Matrix4<f32>, // transforms to be implemented soon
     bvh_root: Option<Box<BVHNode>>,
+    transform: Matrix4<f32>,
+    inv_transform: Matrix4<f32>,
 }
 impl StaticMesh {
     
     // load a mesh from file to create a new StaticMesh object
-    pub fn load_from_file(file_name: &str, material: Arc<dyn Material + Sync + Send>) -> StaticMesh {
+    pub fn load_from_file(file_name: &str, material: Arc<dyn Material + Sync + Send>, transform: Matrix4<f32>) -> StaticMesh {
         // load obj
         let obj = tobj::load_obj(
             file_name,
@@ -152,7 +153,8 @@ impl StaticMesh {
             mesh: Arc::new(models.remove(0).mesh),
             bvh_root: None,
             material: material.clone(),
-            transform: Matrix4::zero(),
+            transform: transform,
+            inv_transform: transform.inverse_transform().unwrap(),
         };
         //sm.compute_normals();
         sm.build_bvh();
@@ -220,7 +222,8 @@ impl Intersectable for StaticMesh {
     fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
         // intersect bvh but replace material data
         if let Some(root) = &self.bvh_root {
-            if let Some(mut hit) = root.intersect_ray(ray, t_min, t_max) {
+            let transformed_ray = Ray { origin: self.inv_transform.transform_point(point3(ray.origin.x, ray.origin.y, ray.origin.z)).to_vec(), direction: self.inv_transform.transform_vector(ray.direction) };
+            if let Some(mut hit) = root.intersect_ray(&transformed_ray, t_min, t_max) {
                 hit.material = self.material.clone();
                 return Some(hit);
             }
@@ -305,7 +308,9 @@ impl Intersectable for Sphere {
             None
         }
         else {
-            let t = (-b - d.sqrt()) / (2.0*a);
+            let t1 = (-b - d.sqrt()) / (2.0*a);
+            let t2 = (-b + d.sqrt()) / (2.0*a);
+            let t = if t1 >= t_min { t1 } else { t2 };
             let hitpoint = ray.origin + t*ray.direction;
             if t < t_min || t > t_max { return None }
             Some(RayHit::new(t, (hitpoint - self.center).normalize(), self.material.clone(), ray))
@@ -391,5 +396,40 @@ impl Intersectable for Plane {
     }
     fn bounding_box(&self) -> Option<AABB> {
         None
+    }
+}
+
+pub struct ConvexVolume {
+    pub boundary: Arc<dyn Intersectable + Send + Sync>,
+    pub phase_function: Arc<dyn Material + Send + Sync>, 
+    pub density: f32,
+    // phase function = probabiltiy distrubution function for scattering at each angle (https://www.pbr-book.org/3ed-2018/Volume_Scattering/Phase_Functions)
+}
+impl Intersectable for ConvexVolume {
+    fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
+        // find where ray enters and exits the volume (if at all)
+        let hit_entr = self.boundary.intersect_ray(ray, f32::MIN, f32::MAX);
+        if hit_entr.is_none() { return None; }
+        let t_entr = hit_entr.unwrap().distance;
+        let hit_exit = self.boundary.intersect_ray(ray, t_entr+0.0001, f32::MAX);
+        if hit_exit.is_none() { return None; }
+        let t_exit = hit_exit.unwrap().distance;
+        // if ray exits before t_min or enters after t_max, return
+        if t_exit < t_min || t_entr > t_max { return None }
+        let t_start = f32::max(t_entr, t_min);
+        let t_end = f32::min(t_exit, t_max);
+        let dist_in_volume = t_end-t_start;
+        let dist_before_scatter = (-1.0/self.density) * f32::ln(rand::thread_rng().gen_range(0.0..1.0)); // not sure where this log comes from
+        if dist_before_scatter < dist_in_volume {
+            // ray scatters t_start + dist_before_scatter forward from its current location
+            Some(RayHit::new(t_start+dist_before_scatter, Vec3::zero(), self.phase_function.clone(), ray))
+            // (normal and front_face are arbitrary)
+        }
+        else {
+            None // ray passes through without scattering
+        }
+    }
+    fn bounding_box(&self) -> Option<AABB> {
+        self.boundary.bounding_box()
     }
 }

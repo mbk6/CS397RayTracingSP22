@@ -103,6 +103,22 @@ impl Material for Dielectric {
     }
 }
 
+// PHASE FUNCTIONS
+pub struct Isotropic {
+    // An isotropic phase function is one where light scatters in all directions with equal probability
+    // (there's only one such function, so this one is just parameterized by an albedo)
+    pub albedo: Color,
+}
+impl Material for Isotropic {
+    fn scatter(&self, hit: &RayHit, ray: &Ray) -> (Ray, Color, f32) {
+        // by definition, the isotropic phase function is where light scatters in all directions with equal distribution
+        (Ray {origin: hit.hitpoint, direction: rand_sphere_vec() }, self.albedo, 1.0)
+    }
+    fn emission(&self) -> Color {
+        Vec3::zero() // volumes don't emit light (at least for now)
+    }
+}
+
 
 // SAMPLING FUNCTIONS
 // uniformly samples a hemisphere given by normal n
@@ -132,7 +148,6 @@ pub fn alpha_sample(hit: &RayHit) -> (Vec3, f32) {
 
 // based on raytracing in one weekend
 pub fn rtow_sample(hit: &RayHit) -> (Vec3, f32) {
-    let mut rng = rand::thread_rng();
     let dir = rand_sphere_vec();
     (hit.hitpoint + hit.normal + dir, 1.0/(2.0*PI))
 }
