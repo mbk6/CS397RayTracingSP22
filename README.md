@@ -53,9 +53,9 @@ Michael Korenchan | Computer Science | Univesity of Illinois
 - **Week of Mar 28**
   - Added dielectric materials
   - Now rendering Cornell box with various metal/glass/emissive/lambertian surfaces
- **Week of Apr 4**
+- **Week of Apr 4**
   - Added defocus blur
   - Added ability to transform BVHs
   - Added isotropic volumes
- **Week of Apr 11**
+- **Week of Apr 11**
   - Added texture loading, sampling, and rendering
