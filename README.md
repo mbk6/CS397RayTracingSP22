@@ -57,3 +57,5 @@ Michael Korenchan | Computer Science | Univesity of Illinois
   - Added defocus blur
   - Added ability to transform BVHs
   - Added isotropic volumes
+ **Week of Apr 11**
+  - Added texture loading, sampling, and rendering

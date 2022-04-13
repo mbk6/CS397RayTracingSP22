@@ -1,6 +1,8 @@
 // MATERIALS - Implements various materials
+
+#![allow(dead_code)]
+
 use cgmath::*;
-use rayon::str::MatchIndices;
 use std::f32::consts::PI;
 use rand::Rng;
 
@@ -31,7 +33,7 @@ impl Default for Lambertian {
 
 }
 impl Material for Lambertian {
-    fn scatter(&self, hit: &RayHit, ray: &Ray) -> (Ray, Color, f32) {
+    fn scatter(&self, hit: &RayHit, _ray: &Ray) -> (Ray, Color, f32) {
         let (dir, pdf) = sample_hemisphere(hit);
         (
             Ray {
@@ -80,7 +82,7 @@ impl Material for Dielectric {
         let critical_angle = eta*f32::sqrt(1.0-f32::min(-ray.direction.dot(hit.normal), 1.0).powi(2)) > 1.0;
         let fresnel_factor = fresnel(&ray.direction, &hit.normal, self.idx_of_refraction);
         // if angle is less than critical, then refract with probability according to fresnel coefficient (proportion of reflected/transmitted light)
-        let will_refract = rand::thread_rng().gen_range(0.0..1.0) >= fresnel_factor;
+        let will_refract = !critical_angle && rand::thread_rng().gen_range(0.0..1.0) >= fresnel_factor;
         let new_dir = if will_refract {
             refract(&ray.direction, &hit.normal, eta)
         }
@@ -108,14 +110,15 @@ pub struct Isotropic {
     // An isotropic phase function is one where light scatters in all directions with equal probability
     // (there's only one such function, so this one is just parameterized by an albedo)
     pub albedo: Color,
+    pub emission: Color,
 }
 impl Material for Isotropic {
-    fn scatter(&self, hit: &RayHit, ray: &Ray) -> (Ray, Color, f32) {
+    fn scatter(&self, hit: &RayHit, _ray: &Ray) -> (Ray, Color, f32) {
         // by definition, the isotropic phase function is where light scatters in all directions with equal distribution
         (Ray {origin: hit.hitpoint, direction: rand_sphere_vec() }, self.albedo, 1.0)
     }
     fn emission(&self) -> Color {
-        Vec3::zero() // volumes don't emit light (at least for now)
+        self.emission
     }
 }
 

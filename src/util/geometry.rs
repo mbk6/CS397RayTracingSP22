@@ -1,5 +1,7 @@
 // GEOMETRY - Implements geometric primitives, mesh loading, bvh construction/intersection
 
+#![allow(dead_code)]
+
 use std::{sync::Arc};
 use tobj::{self, Mesh};
 use cgmath::*;
@@ -8,6 +10,7 @@ use rand::Rng;
 
 use super::tracing::*;
 use super::materials::*;
+use super::texture::*;
 
 
 ////////////////////////////////////////////////////////
@@ -69,6 +72,7 @@ impl Intersectable for AABB {
             hitpoint: Vec3::zero(),
             normal: Vec3::zero(),
             material: Arc::new(Lambertian::default()),
+            tex_coords: None,
         })
     }
     fn bounding_box(&self) -> Option<AABB> {
@@ -122,7 +126,8 @@ impl Intersectable for BVHNode {
 #[derive(Clone)]
 pub struct StaticMesh {
     mesh: Arc<Mesh>,
-    material: Arc<dyn Material + Send + Sync>,
+    material: Option<Arc<dyn Material + Send + Sync>>,
+    texture: Option<Texture>,
     bvh_root: Option<Box<BVHNode>>,
     transform: Matrix4<f32>,
     inv_transform: Matrix4<f32>,
@@ -130,7 +135,7 @@ pub struct StaticMesh {
 impl StaticMesh {
     
     // load a mesh from file to create a new StaticMesh object
-    pub fn load_from_file(file_name: &str, material: Arc<dyn Material + Sync + Send>, transform: Matrix4<f32>) -> StaticMesh {
+    pub fn load_from_file(file_name: &str, texture_path: Option<&str>, material: Option<Arc<dyn Material + Sync + Send>>, transform: Matrix4<f32>) -> StaticMesh {
         // load obj
         let obj = tobj::load_obj(
             file_name,
@@ -152,7 +157,8 @@ impl StaticMesh {
         let mut sm = StaticMesh { 
             mesh: Arc::new(models.remove(0).mesh),
             bvh_root: None,
-            material: material.clone(),
+            material: material,
+            texture: if texture_path.is_some() { Texture::load_from_file(texture_path.unwrap()) } else { None },
             transform: transform,
             inv_transform: transform.inverse_transform().unwrap(),
         };
@@ -217,6 +223,13 @@ impl StaticMesh {
         let c = vec3(mesh.positions[z*3], mesh.positions[z*3+1], mesh.positions[z*3+2]);
         (a,b,c)
     }
+    pub fn get_texcoords_from_mesh(mesh: &Mesh, idx: usize) -> (Vec2,Vec2,Vec2) {
+        let (x,y,z) = (mesh.indices[idx*3] as usize, mesh.indices[idx*3+1] as usize, mesh.indices[idx*3+2] as usize);
+        let a = vec2(mesh.texcoords[x*2], mesh.texcoords[x*2+1]);
+        let b = vec2(mesh.texcoords[y*2], mesh.texcoords[y*2+1]);
+        let c = vec2(mesh.texcoords[z*2], mesh.texcoords[z*2+1]);
+        (a,b,c)
+    }
 }
 impl Intersectable for StaticMesh {
     fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
@@ -224,7 +237,17 @@ impl Intersectable for StaticMesh {
         if let Some(root) = &self.bvh_root {
             let transformed_ray = Ray { origin: self.inv_transform.transform_point(point3(ray.origin.x, ray.origin.y, ray.origin.z)).to_vec(), direction: self.inv_transform.transform_vector(ray.direction) };
             if let Some(mut hit) = root.intersect_ray(&transformed_ray, t_min, t_max) {
-                hit.material = self.material.clone();
+                if self.material.is_some() {
+                    hit.material = self.material.as_ref().unwrap().clone();
+                }
+                else if self.texture.is_some() && hit.tex_coords.is_some() {
+                    // lookup material parameters
+                    hit.material = Arc::new(Lambertian { 
+                        albedo: self.texture.as_ref().unwrap().sample(hit.tex_coords.unwrap()),
+                    //    albedo: vec3(hit.tex_coords.unwrap().x, hit.tex_coords.unwrap().y, 0.0),
+                        ..Default::default()
+                    })
+                }
                 return Some(hit);
             }
         }
@@ -264,10 +287,14 @@ impl Intersectable for IndexedTriangle {
         let v = f*ray.direction.dot(r);
         if v < 0.0 || u+v > 1.0 { return None }
         let t = f*e2.dot(r);
-        let hitpoint = ray.origin + t*ray.direction;
+        //let hitpoint = ray.origin + t*ray.direction;
         if t < t_min || t > t_max { return None }
+        let mut hit = RayHit::new(t, e1.cross(e2).normalize(), Arc::new(Lambertian::default()), ray);
         
-        Some(RayHit::new(t, e1.cross(e2).normalize(), Arc::new(Lambertian::default()), ray))
+        // get texcoords an interpolate:
+        let (tca, tcb, tcc) = StaticMesh::get_texcoords_from_mesh(&self.mesh, self.idx);
+        hit.tex_coords = Some(u*tcb+v*tcc+(1.0-u-v)*tca);
+        Some(hit)
     }
     fn bounding_box(&self) -> Option<AABB> {
         let (a,b,c) = StaticMesh::get_triangle_from_mesh(&self.mesh, self.idx);
@@ -349,7 +376,7 @@ impl Intersectable for Triangle {
         let v = f*ray.direction.dot(r);
         if v < 0.0 || u+v > 1.0 { return None }
         let t = f*e2.dot(r);
-        let hitpoint = ray.origin + t*ray.direction;
+        // let hitpoint = ray.origin + t*ray.direction;
         if t < t_min || t > t_max { return None }
 
         Some(RayHit::new(t, e1.cross(e2).normalize(), self.material.clone(), ray))
@@ -389,7 +416,7 @@ impl Intersectable for Plane {
         else {
             let t = origin_dist.abs() / d.abs();
             if t < t_min || t > t_max { return None }
-            let hitpoint = ray.origin + t*ray.direction;
+            // let hitpoint = ray.origin + t*ray.direction;
 
             Some(RayHit::new(t, n, self.material.clone(), ray))
         }
