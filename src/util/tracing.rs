@@ -356,9 +356,9 @@ pub fn run() {
             lens_radius: 0.0,   // radius of thin-lens approximation
             projection_mode: CameraProjectionMode::Perspective,
             shading_mode: ShadingMode::PathTrace,
-            screen_width: 400,
-            screen_height: 400,
-            aa_sample_count: 500,
+            screen_width: 800,
+            screen_height: 800,
+            aa_sample_count: 1000,
             path_depth: 10,     // path-tracing recursion depth
             path_samples: 1,    // sub-rays cast per recursion (slow if more than 1)
             max_trace_dist: 100.0,
