@@ -127,7 +127,7 @@ impl Intersectable for BVHNode {
 pub struct StaticMesh {
     mesh: Arc<Mesh>,
     material: Option<Arc<dyn Material + Send + Sync>>,
-    texture: Option<Texture>,
+    textures: [Option<Texture>; 4], // 0 - albedo, 1 - emission, 2 - metallic, 3 - roughness
     bvh_root: Option<Box<BVHNode>>,
     transform: Matrix4<f32>,
     inv_transform: Matrix4<f32>,
@@ -135,7 +135,7 @@ pub struct StaticMesh {
 impl StaticMesh {
     
     // load a mesh from file to create a new StaticMesh object
-    pub fn load_from_file(file_name: &str, texture_path: Option<&str>, material: Option<Arc<dyn Material + Sync + Send>>, transform: Matrix4<f32>) -> StaticMesh {
+    pub fn load_from_file(file_name: &str, albedo_path: Option<&str>, emission_path: Option<&str>, metallic_path: Option<&str>, roughness_path: Option<&str>, material: Option<Arc<dyn Material + Sync + Send>>, transform: Matrix4<f32>) -> StaticMesh {
         // load obj
         let obj = tobj::load_obj(
             file_name,
@@ -158,7 +158,12 @@ impl StaticMesh {
             mesh: Arc::new(models.remove(0).mesh),
             bvh_root: None,
             material: material,
-            texture: if texture_path.is_some() { Texture::load_from_file(texture_path.unwrap()) } else { None },
+            textures: [
+                if albedo_path.is_some() { Texture::load_from_file(albedo_path.unwrap()) } else { None },
+                if emission_path.is_some() { Texture::load_from_file(emission_path.unwrap()) } else { None },
+                if metallic_path.is_some() { Texture::load_from_file(metallic_path.unwrap()) } else { None },
+                if roughness_path.is_some() { Texture::load_from_file(roughness_path.unwrap()) } else { None },
+            ],
             transform: transform,
             inv_transform: transform.inverse_transform().unwrap(),
         };
@@ -230,6 +235,46 @@ impl StaticMesh {
         let c = vec2(mesh.texcoords[z*2], mesh.texcoords[z*2+1]);
         (a,b,c)
     }
+    pub fn get_normals_from_mesh(mesh: &Mesh, idx: usize) -> (Vec3, Vec3, Vec3) {
+        let (x,y,z) = (mesh.indices[idx*3] as usize, mesh.indices[idx*3+1] as usize, mesh.indices[idx*3+2] as usize);
+        let a = vec3(mesh.normals[x*3], mesh.normals[x*3+1], mesh.normals[x*3+2]);
+        let b = vec3(mesh.normals[y*3], mesh.normals[y*3+1], mesh.normals[y*3+2]);
+        let c = vec3(mesh.normals[z*3], mesh.normals[z*3+1], mesh.normals[z*3+2]);
+        (a,b,c)
+    }
+
+    // sample different textures at a point and return an appropriate material
+    pub fn get_material_at_uv(&self, tex_coord: Option<Vec2>) -> Arc<dyn Material + Send + Sync> {
+        // if object has a single specified material, then it describes the whole surfaces
+        if self.material.is_some() || tex_coord.is_none() {
+            self.material.as_ref().unwrap().clone()
+        }
+        else {
+            let uv = tex_coord.unwrap();
+            let albedo = self.textures[0].as_ref().unwrap().sample(uv);
+            let emission = self.textures[1].as_ref().unwrap().sample(uv);
+            let metallic = self.textures[2].as_ref().unwrap().sample(uv).x;
+            let roughness = self.textures[3].as_ref().unwrap().sample(uv).x;
+
+            // if not particularly metallic, use a lambertian
+            if metallic < 0.001 {
+                Arc::new(Lambertian { 
+                    albedo: albedo,
+                    emission: emission,
+                })
+            }
+            else {
+                Arc::new(Metal { 
+                    albedo: albedo,
+                    emission: emission,
+                    roughness: roughness,
+                })
+            }
+            
+
+            
+        }
+    }
 }
 impl Intersectable for StaticMesh {
     fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
@@ -237,17 +282,9 @@ impl Intersectable for StaticMesh {
         if let Some(root) = &self.bvh_root {
             let transformed_ray = Ray { origin: self.inv_transform.transform_point(point3(ray.origin.x, ray.origin.y, ray.origin.z)).to_vec(), direction: self.inv_transform.transform_vector(ray.direction) };
             if let Some(mut hit) = root.intersect_ray(&transformed_ray, t_min, t_max) {
-                if self.material.is_some() {
-                    hit.material = self.material.as_ref().unwrap().clone();
-                }
-                else if self.texture.is_some() && hit.tex_coords.is_some() {
-                    // lookup material parameters
-                    hit.material = Arc::new(Lambertian { 
-                        albedo: self.texture.as_ref().unwrap().sample(hit.tex_coords.unwrap()),
-                    //    albedo: vec3(hit.tex_coords.unwrap().x, hit.tex_coords.unwrap().y, 0.0),
-                        ..Default::default()
-                    })
-                }
+                hit.hitpoint = self.transform.transform_point(point3(hit.hitpoint.x, hit.hitpoint.y, hit.hitpoint.z)).to_vec();
+                hit.normal = self.inv_transform.transpose().transform_vector(hit.normal).normalize();
+                hit.material = self.get_material_at_uv(hit.tex_coords);
                 return Some(hit);
             }
         }
@@ -289,7 +326,9 @@ impl Intersectable for IndexedTriangle {
         let t = f*e2.dot(r);
         //let hitpoint = ray.origin + t*ray.direction;
         if t < t_min || t > t_max { return None }
-        let mut hit = RayHit::new(t, e1.cross(e2).normalize(), Arc::new(Lambertian::default()), ray);
+        let (na, nb, nc) = StaticMesh::get_normals_from_mesh(&self.mesh, self.idx);
+        let mesh_normal = (u*nb+v*nc+(1.0-u-v)*na).normalize();
+        let mut hit = RayHit::new(t, mesh_normal /*e1.cross(e2).normalize()*/, Arc::new(Lambertian::default()), ray);
         
         // get texcoords an interpolate:
         let (tca, tcb, tcc) = StaticMesh::get_texcoords_from_mesh(&self.mesh, self.idx);

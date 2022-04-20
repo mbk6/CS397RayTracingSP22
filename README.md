@@ -59,3 +59,9 @@ Michael Korenchan | Computer Science | Univesity of Illinois
   - Added isotropic volumes
 - **Week of Apr 11**
   - Added texture loading, sampling, and rendering
+- **Week of Apr 18**
+  - Looked into running on the GPU again; nothing working yet
+  - Fixed transformations misrepresenting normals and hitpoints
+  - Meshes now use smoother precomputed normals
+  - Added simple support for emission, metallic, and roughness maps
+  - Various textures affect material type at each point

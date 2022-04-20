@@ -52,21 +52,22 @@ impl Material for Lambertian {
 // METAL
 pub struct Metal {
     pub albedo: Color,
-    pub glossiness: f32,
+    pub emission: Color,
+    pub roughness: f32,
 }
 impl Material for Metal {
     fn scatter(&self, hit: &RayHit, ray: &Ray) -> (Ray, Color, f32) {
         (
             Ray {
                 origin: hit.hitpoint,
-                direction: reflect(&ray.direction, &hit.normal) + self.glossiness*rand_sphere_vec(),
+                direction: reflect(&ray.direction, &hit.normal) + self.roughness*rand_sphere_vec(),
             },
             self.albedo,
             1.0
         )
     }
     fn emission(&self) -> Color {
-        Vec3::zero()
+        self.emission
     }
 }
 
