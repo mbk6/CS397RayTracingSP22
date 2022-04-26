@@ -357,9 +357,9 @@ pub fn run() {
             lens_radius: 0.0,   // radius of thin-lens approximation
             projection_mode: CameraProjectionMode::Perspective,
             shading_mode: ShadingMode::PathTrace,
-            screen_width: 800,
-            screen_height: 800,
-            aa_sample_count: 10000,
+            screen_width: 200,
+            screen_height: 200,
+            aa_sample_count: 100,
             path_depth: 10,     // path-tracing recursion depth
             path_samples: 1,    // sub-rays cast per recursion (slow if more than 1)
             max_trace_dist: 100.0,
@@ -417,7 +417,16 @@ pub fn run() {
             Arc::new(Sphere {
                 center: vec3(-0.42,0.5,2.5),
                 radius: 0.5,
-                material: Arc::new(Dielectric { idx_of_refraction: 2.1})
+                material: Arc::new(Dielectric { idx_of_refraction: 1.5})
+            }),
+            Arc::new(ConvexVolume {
+                boundary: Arc::new(Sphere {
+                    center: vec3(-0.42,0.5,2.5),
+                    radius: 0.5,
+                    material: Arc::new(Dielectric { idx_of_refraction: 1.5}) /* arbitrary */,
+                }),
+                phase_function: Arc::new(Isotropic { albedo: vec3(0.2,0.4,0.9), emission: Vec3::zero() }),
+                density: 10.0,
             }),
             Arc::new(Sphere {
                 center: vec3(-14.0,0.65,-15.0),
@@ -455,7 +464,7 @@ pub fn run() {
             Arc::new(Plane {
                 point: vec3(0.0, 0.0, 0.0),
                 normal: Vec3::unit_y(),
-                material: Arc::new(Lambertian { albedo: vec3(0.73,0.73,0.73), ..Default::default() }),
+                material: Arc::new(Lambertian { albedo: vec3(0.63,0.63,0.63), ..Default::default() }),
             }),  
             //  Arc::new(Plane {
             //     point: vec3(0.0, 0.0, -4.0),
@@ -483,25 +492,25 @@ pub fn run() {
                 a: vec3(-1.5, 4.95, -0.5),
                 b: vec3(1.5, 4.95,  -0.5),
                 c: vec3(1.5, 4.95, 1.5),
-                material: Arc::new(Lambertian { albedo: vec3(0.0,0.6,0.0), emission: vec3(2.0,2.0,2.0), ..Default::default() }),
+                material: Arc::new(Lambertian { albedo: vec3(0.0,0.6,0.0), emission: vec3(7.0,7.0,7.0), ..Default::default() }),
             }),
             Arc::new(Triangle {
                 a: vec3(-1.5, 4.95, -0.5),
                 b: vec3(-1.5, 4.95,  1.5),
                 c: vec3(1.5, 4.95, 1.5),
-                material: Arc::new(Lambertian { albedo: vec3(0.0,0.6,0.0), emission: vec3(2.0,2.0,2.0), ..Default::default() }),
+                material: Arc::new(Lambertian { albedo: vec3(0.0,0.6,0.0), emission: vec3(7.0,7.0,7.0), ..Default::default() }),
             }),
             // Arc::new(Triangle {
             //     a: vec3(-2.5, 4.95, -0.5),
             //     b: vec3(2.5, 4.95,  -0.5),
             //     c: vec3(2.5, 4.95, 3.5),
-            //     material: Arc::new(Lambertian { albedo: vec3(0.0,0.6,0.0), emission: vec3(2.0,2.0,2.0), ..Default::default() }),
+            //     material: Arc::new(Lambertian { albedo: vec3(0.0,0.6,0.0), emission: vec3(7.0,7.0,7.0), ..Default::default() }),
             // }),
             // Arc::new(Triangle {
             //     a: vec3(-2.5, 4.95, -0.5),
             //     b: vec3(-2.5, 4.95,  3.5),
             //     c: vec3(2.5, 4.95, 3.5),
-            //     material: Arc::new(Lambertian { albedo: vec3(0.0,0.6,0.0), emission: vec3(2.0,2.0,2.0), ..Default::default() }),
+            //     material: Arc::new(Lambertian { albedo: vec3(0.0,0.6,0.0), emission: vec3(7.0,7.0,7.0), ..Default::default() }),
             // }),
             // Arc::new(Plane {
             //     point: vec3(0.0, 40.0, 0.0),
