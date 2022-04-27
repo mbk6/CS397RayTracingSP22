@@ -65,3 +65,5 @@ Michael Korenchan | Computer Science | Univesity of Illinois
   - Meshes now use smoother precomputed normals
   - Added simple support for emission, metallic, and roughness maps
   - Various textures affect material type at each point
+- **Week of Apr 25**
+  - Added subsurface reflection object by combining a dielectric with an isotropic volume
