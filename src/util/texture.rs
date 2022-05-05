@@ -25,8 +25,8 @@ impl Texture {
     }
     pub fn sample(&self, uv: Vec2) -> Color {
         // nearest neighbor for now:
-        let x = (uv.x.clamp(0.0, 1.0)*self.img.width() as f32) as u32;
-        let y = ((1.0-uv.y.clamp(0.0, 1.0))*self.img.height() as f32) as u32;
+        let mut x = u32::min((uv.x.clamp(0.0, 0.999)*self.img.width() as f32) as u32, self.img.width()-1);
+        let mut y = u32::min(((1.0-uv.y.clamp(0.0, 0.999))*self.img.height() as f32) as u32, self.img.height()-1);
         let pxl = self.img.get_pixel(x,y).to_rgb();
         vec3(pxl[0] as f32/255.0, pxl[1] as f32/255.0, pxl[2] as f32/255.0)
         //vec3(1.0,0.0,1.0)

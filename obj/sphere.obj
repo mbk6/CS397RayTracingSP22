@@ -1,7 +1,6 @@
 # Blender v2.91.2 OBJ File: ''
 # www.blender.org
-mtllib sphere.mtl
-o Sphere.001
+
 v -0.146729 0.989186 0.000002
 v -0.122410 0.992489 0.000002
 v -0.122262 0.992489 -0.006005

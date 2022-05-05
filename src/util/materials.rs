@@ -106,6 +106,60 @@ impl Material for Dielectric {
     }
 }
 
+// Represents a material that can be parameterized by standard textures
+pub struct ParameterizedMaterial {
+    pub albedo: Color,
+    pub emission: Color,
+    pub roughness: f32,
+    pub metallic: f32,
+}
+impl Material for ParameterizedMaterial {
+    // UE4: DiffuseColor = AlbedoColor - AlbedoColor * Metallic;
+    //      SpecColor = lerp(0.08 * Specular.xxx, AlbedoColor, Metallic)
+
+    fn scatter(&self, hit: &RayHit, ray: &Ray) -> (Ray, Color, f32) {
+        // let f0 = lerpvec(vec3(0.04,0.04,0.04), self.albedo, self.metallic);
+        // let fresnel = vec3(
+        //     fresnel(&ray.direction, &hit.normal, f0.x),
+        //     fresnel(&ray.direction, &hit.normal, f0.y),
+        //     fresnel(&ray.direction, &hit.normal, f0.z),
+        // );
+        let fresnel = fresnel(&ray.direction, &hit.normal, 1.5);
+        let k_s = fresnel*(1.0-self.roughness);
+        let k_d = (1.0-k_s)*(1.0-self.metallic);
+
+
+        if rand::thread_rng().gen_range(0.0..1.0) < k_d {
+            // diffuse
+            let (dir, pdf) = sample_hemisphere(hit);
+            (
+                Ray {
+                    origin: hit.hitpoint,
+                    direction: dir,
+                },
+                self.albedo / PI,
+                pdf,
+            )
+        }
+        else {
+            // specular
+            (
+                Ray {
+                    origin: hit.hitpoint,
+                    direction: reflect(&ray.direction, &hit.normal) + self.roughness*rand_sphere_vec(),
+                },
+                lerpvec(vec3(1.0,1.0,1.0), self.albedo, self.metallic),
+                1.0
+            )
+        }
+
+
+    }
+    fn emission(&self) -> Color {
+        self.emission
+    }
+}
+
 // PHASE FUNCTIONS
 pub struct Isotropic {
     // An isotropic phase function is one where light scatters in all directions with equal probability

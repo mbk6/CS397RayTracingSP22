@@ -73,6 +73,8 @@ impl Intersectable for AABB {
             normal: Vec3::zero(),
             material: Arc::new(Lambertian::default()),
             tex_coords: None,
+            tangent: None,
+            bitangent: None,
         })
     }
     fn bounding_box(&self) -> Option<AABB> {
@@ -127,7 +129,7 @@ impl Intersectable for BVHNode {
 pub struct StaticMesh {
     mesh: Arc<Mesh>,
     material: Option<Arc<dyn Material + Send + Sync>>,
-    textures: [Option<Texture>; 4], // 0 - albedo, 1 - emission, 2 - metallic, 3 - roughness
+    textures: [Option<Texture>; 5], // 0 - albedo, 1 - emission, 2 - metallic, 3 - roughness, 4 - normal
     bvh_root: Option<Box<BVHNode>>,
     transform: Matrix4<f32>,
     inv_transform: Matrix4<f32>,
@@ -135,7 +137,7 @@ pub struct StaticMesh {
 impl StaticMesh {
     
     // load a mesh from file to create a new StaticMesh object
-    pub fn load_from_file(file_name: &str, albedo_path: Option<&str>, emission_path: Option<&str>, metallic_path: Option<&str>, roughness_path: Option<&str>, material: Option<Arc<dyn Material + Sync + Send>>, transform: Matrix4<f32>) -> StaticMesh {
+    pub fn load_from_file(file_name: &str, albedo_path: Option<&str>, emission_path: Option<&str>, metallic_path: Option<&str>, roughness_path: Option<&str>, normal_path: Option<&str>, material: Option<Arc<dyn Material + Sync + Send>>, transform: Matrix4<f32>) -> StaticMesh {
         // load obj
         let obj = tobj::load_obj(
             file_name,
@@ -163,6 +165,7 @@ impl StaticMesh {
                 if emission_path.is_some() { Texture::load_from_file(emission_path.unwrap()) } else { None },
                 if metallic_path.is_some() { Texture::load_from_file(metallic_path.unwrap()) } else { None },
                 if roughness_path.is_some() { Texture::load_from_file(roughness_path.unwrap()) } else { None },
+                if normal_path.is_some() { Texture::load_from_file(normal_path.unwrap()) } else { None },
             ],
             transform: transform,
             inv_transform: transform.inverse_transform().unwrap(),
@@ -243,6 +246,14 @@ impl StaticMesh {
         (a,b,c)
     }
 
+    pub fn get_tangent(uv1: Vec2, uv2: Vec2, uv3: Vec2, p1: Vec3, p2: Vec3, p3: Vec3) -> Vec3 {
+        let (u1, u2, u3) = (uv1.x, uv2.x, uv3.x);
+        let (v1, v2, v3) = (uv1.y, uv2.y, uv3.y);    
+        let t = ((v3-v1)*(p2-p1)-(v2-v1)*(p3-p1)) / ((u2-u1)*(v3-v1)-(v2-v1)*(u3-u1));
+        // let b = ((u3-u1)*(p2-p1)-(u2-u1)*(p3-p1))/((v2-v1)*(u3-u1)-(u2-u1)*(v3-v1));
+        t
+    }
+
     // sample different textures at a point and return an appropriate material
     pub fn get_material_at_uv(&self, tex_coord: Option<Vec2>) -> Arc<dyn Material + Send + Sync> {
         // if object has a single specified material, then it describes the whole surfaces
@@ -251,29 +262,84 @@ impl StaticMesh {
         }
         else {
             let uv = tex_coord.unwrap();
-            let albedo = self.textures[0].as_ref().unwrap().sample(uv);
-            let emission = self.textures[1].as_ref().unwrap().sample(uv);
-            let metallic = self.textures[2].as_ref().unwrap().sample(uv).x;
-            let roughness = self.textures[3].as_ref().unwrap().sample(uv).x;
+            let albedo = if let Some(tex) = self.textures[0].as_ref() {tex.sample(uv)} else {Vec3::zero()};
+            let emission = if let Some(tex) = self.textures[1].as_ref() {tex.sample(uv)} else {Vec3::zero()};
+            let metallic = if let Some(tex) = self.textures[2].as_ref() {tex.sample(uv).x} else {0.0};
+            let roughness = if let Some(tex) = self.textures[3].as_ref() {tex.sample(uv).x} else {1.0};
+            let mut rng = rand::thread_rng();
 
-            // if not particularly metallic, use a lambertian
-            if metallic < 0.001 {
-                Arc::new(Lambertian { 
-                    albedo: albedo,
-                    emission: emission,
-                })
-            }
-            else {
-                Arc::new(Metal { 
-                    albedo: albedo,
-                    emission: emission,
-                    roughness: roughness,
-                })
-            }
-            
+            // // return Arc::new(Lambertian { 
+            // //     albedo: albedo,
+            // //     emission:  Vec3::zero(),
+            // // });
+
+
+            // // if not particularly metallic, use a lambertian
+            // if rng.gen_range(0.0..1.0) < metallic {
+            //     Arc::new(Metal { 
+            //         albedo: albedo,
+            //         emission: emission,
+            //         roughness: roughness,
+            //     })
+            // }
+            // else {
+            //     if rng.gen_range(0.0..1.0) < roughness {
+            //         Arc::new(Lambertian { 
+            //             albedo: albedo,
+            //             emission: emission,
+            //         })
+            //     }
+            //     else {
+            //         Arc::new(Metal { 
+            //             albedo: vec3(1.0,1.0,1.0),
+            //             emission: emission,
+            //             roughness: roughness,
+            //         })
+            //     }
+            // }
+            // // Arc::new(Lambertian { 
+            // //     albedo: vec3(metallic, roughness, 0.0),
+            // //     emission: Vec3::zero(),
+            // // })
+
+            Arc::new(ParameterizedMaterial {
+                albedo: albedo,
+                emission: emission,
+                roughness: roughness,
+                metallic: metallic,
+            })
 
             
         }
+    }
+
+    fn get_adjusted_normal(&self, hit: &RayHit) -> Vec3 {
+        let n = 
+            if self.textures[4].is_some() {
+                if let Some(tangent) = hit.tangent {
+                    if let Some(bitangent) = hit.bitangent {
+                        // use normal map to adjust
+                        let uv = hit.tex_coords.unwrap();
+                        let normalmap_sample = self.textures[4].as_ref().unwrap().sample(uv);
+                        let normalmap_vector = (2.0*normalmap_sample - vec3(1.0,1.0,1.0));
+                        // let normalmap_vector = vec3(0.0,0.0,1.0);
+                        
+                        Matrix3::from_cols(tangent, bitangent, hit.normal)*normalmap_vector
+                        // bitangent
+                    }
+                    else {
+                        hit.normal
+                    }
+                }
+                else {
+                    hit.normal
+                }
+            }
+            else {
+                hit.normal
+            };
+
+        self.inv_transform.transpose().transform_vector(n).normalize()
     }
 }
 impl Intersectable for StaticMesh {
@@ -283,7 +349,7 @@ impl Intersectable for StaticMesh {
             let transformed_ray = Ray { origin: self.inv_transform.transform_point(point3(ray.origin.x, ray.origin.y, ray.origin.z)).to_vec(), direction: self.inv_transform.transform_vector(ray.direction) };
             if let Some(mut hit) = root.intersect_ray(&transformed_ray, t_min, t_max) {
                 hit.hitpoint = self.transform.transform_point(point3(hit.hitpoint.x, hit.hitpoint.y, hit.hitpoint.z)).to_vec();
-                hit.normal = self.inv_transform.transpose().transform_vector(hit.normal).normalize();
+                hit.normal = self.get_adjusted_normal(&hit);
                 hit.material = self.get_material_at_uv(hit.tex_coords);
                 return Some(hit);
             }
@@ -333,6 +399,14 @@ impl Intersectable for IndexedTriangle {
         // get texcoords an interpolate:
         let (tca, tcb, tcc) = StaticMesh::get_texcoords_from_mesh(&self.mesh, self.idx);
         hit.tex_coords = Some(u*tcb+v*tcc+(1.0-u-v)*tca);
+
+        // compute tangent and bitangent vectors. current method uses approximate per-triangle tangent and per-vertex normal to get tnb frame
+        let tan_approx = StaticMesh::get_tangent(tca, tcb, tcc, a, b, c);
+        let bitangent = hit.normal.cross(tan_approx).normalize();
+        let tangent = bitangent.cross(hit.normal).normalize();
+        hit.tangent = Some(tangent);
+        hit.bitangent = Some(bitangent);
+
         Some(hit)
     }
     fn bounding_box(&self) -> Option<AABB> {

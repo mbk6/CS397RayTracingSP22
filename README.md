@@ -67,3 +67,6 @@ Michael Korenchan | Computer Science | Univesity of Illinois
   - Various textures affect material type at each point
 - **Week of Apr 25**
   - Added subsurface reflection object by combining a dielectric with an isotropic volume
+- **Week of May 2**
+  - Completed normal map support
+  - Completed parameterized material controlled by albedo, emission, metallic, and roughness
