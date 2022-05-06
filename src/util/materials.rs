@@ -8,7 +8,7 @@ use rand::Rng;
 
 use super::tracing::*;
 
-// Abstract material definition
+// Trait for material; materials scatter, attenuate, and emit light
 pub trait Material {
     fn scatter(&self, hit: &RayHit, ray: &Ray) -> (Ray, Color, f32); // returns a new ray, its attenuation, and the probabiltiy it was chosen for a given material
     fn emission(&self) -> Color;
@@ -18,23 +18,21 @@ pub trait Material {
 // LAMBERTIAN
 #[derive(Clone, Copy)]
 pub struct Lambertian {
-    pub albedo: Vec3,
-    pub emission: Vec3,
-    // pub ray_sampler: ImportanceSampler,
+    pub albedo: Vec3,   // base color
+    pub emission: Vec3, // emitted light
 }
 impl Default for Lambertian {
     fn default() -> Lambertian {
         Lambertian { 
             albedo: vec3(1.0,1.0,1.0),
             emission: Vec3::zero(),
-            // ray_sampler: sample_hemisphere as ImportanceSampler,
         }
     }
 
 }
 impl Material for Lambertian {
     fn scatter(&self, hit: &RayHit, _ray: &Ray) -> (Ray, Color, f32) {
-        let (dir, pdf) = sample_hemisphere(hit);
+        let (dir, pdf) = sample_hemisphere(hit);    // light is diffused in all directions
         (
             Ray {
                 origin: hit.hitpoint,
@@ -51,13 +49,14 @@ impl Material for Lambertian {
 
 // METAL
 pub struct Metal {
-    pub albedo: Color,
-    pub emission: Color,
-    pub roughness: f32,
+    pub albedo: Color,  // base color
+    pub emission: Color,// emitted light
+    pub roughness: f32, // models microfacets that cause a glossy look
 }
 impl Material for Metal {
     fn scatter(&self, hit: &RayHit, ray: &Ray) -> (Ray, Color, f32) {
         (
+            // metals reflect about normal
             Ray {
                 origin: hit.hitpoint,
                 direction: reflect(&ray.direction, &hit.normal) + self.roughness*rand_sphere_vec(),
@@ -74,7 +73,6 @@ impl Material for Metal {
 // DIELECTRIC
 pub struct Dielectric {
     pub idx_of_refraction: f32,
-    // pub color: Vec3, 
 }
 impl Material for Dielectric {
     fn scatter(&self, hit: &RayHit, ray: &Ray) -> (Ray, Color, f32) {
@@ -96,13 +94,12 @@ impl Material for Dielectric {
                 origin: hit.hitpoint,
                 direction: new_dir
             },
-            //if hit.frontface && !will_refract { vec3(1.0,1.0,1.0) } else { clampvec(self.color*hit.distance, 0.0, 1.0) } ,
             vec3(1.0,1.0,1.0),
             1.0
         )
     }
     fn emission(&self) -> Color {
-        Vec3::zero()
+        Vec3::zero()    // dielectrics generally don't emit light
     }
 }
 
@@ -114,20 +111,11 @@ pub struct ParameterizedMaterial {
     pub metallic: f32,
 }
 impl Material for ParameterizedMaterial {
-    // UE4: DiffuseColor = AlbedoColor - AlbedoColor * Metallic;
-    //      SpecColor = lerp(0.08 * Specular.xxx, AlbedoColor, Metallic)
-
     fn scatter(&self, hit: &RayHit, ray: &Ray) -> (Ray, Color, f32) {
-        // let f0 = lerpvec(vec3(0.04,0.04,0.04), self.albedo, self.metallic);
-        // let fresnel = vec3(
-        //     fresnel(&ray.direction, &hit.normal, f0.x),
-        //     fresnel(&ray.direction, &hit.normal, f0.y),
-        //     fresnel(&ray.direction, &hit.normal, f0.z),
-        // );
+        // based on https://typhomnt.github.io/teaching/ray_tracing/pbr_intro/
         let fresnel = fresnel(&ray.direction, &hit.normal, 1.5);
-        let k_s = fresnel*(1.0-self.roughness);
-        let k_d = (1.0-k_s)*(1.0-self.metallic);
-
+        let k_s = fresnel*(1.0-self.roughness);     // proportion of specular reflected light
+        let k_d = (1.0-k_s)*(1.0-self.metallic);    // proportion of diffusely reflected light
 
         if rand::thread_rng().gen_range(0.0..1.0) < k_d {
             // diffuse
@@ -148,7 +136,7 @@ impl Material for ParameterizedMaterial {
                     origin: hit.hitpoint,
                     direction: reflect(&ray.direction, &hit.normal) + self.roughness*rand_sphere_vec(),
                 },
-                lerpvec(vec3(1.0,1.0,1.0), self.albedo, self.metallic),
+                lerpvec(vec3(1.0,1.0,1.0), self.albedo, self.metallic), // metals attenuate specular light more
                 1.0
             )
         }

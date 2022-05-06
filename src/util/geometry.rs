@@ -88,7 +88,6 @@ pub struct BVHNode {
     pub aabb: AABB,
     pub left: Option<Box<BVHNode>>,
     pub right: Option<Box<BVHNode>>,
-    // pub primitive: Option<Box<dyn Intersectable>>,
     pub primitive: Option<IndexedTriangle>,
 }
 impl Intersectable for BVHNode {
@@ -115,7 +114,6 @@ impl Intersectable for BVHNode {
                     if hit_opt.is_some() { best_hit = hit_opt.clone(); }
                 }
             }
-            // ray misses this node entirely
             best_hit
         }
     }
@@ -127,11 +125,11 @@ impl Intersectable for BVHNode {
 // STATIC MESH
 #[derive(Clone)]
 pub struct StaticMesh {
-    mesh: Arc<Mesh>,
-    material: Option<Arc<dyn Material + Send + Sync>>,
+    mesh: Arc<Mesh>,    // contains geometry data
+    material: Option<Arc<dyn Material + Send + Sync>>, // used only if textures do not describe material
     textures: [Option<Texture>; 5], // 0 - albedo, 1 - emission, 2 - metallic, 3 - roughness, 4 - normal
-    bvh_root: Option<Box<BVHNode>>,
-    transform: Matrix4<f32>,
+    bvh_root: Option<Box<BVHNode>>, // root node of BVH
+    transform: Matrix4<f32>,        // describes position/orientation in scene
     inv_transform: Matrix4<f32>,
 }
 impl StaticMesh {
@@ -153,9 +151,8 @@ impl StaticMesh {
         let materials = materials.expect("Failed to load MTL file");
         println!("Loaded {} successfully:", file_name);
         println!("# of models: {}", models.len());
-        println!("# of materials: {}", materials.len());
         
-        // assume for now that there's only one mesh
+        // assume there's only one mesh
         let mut sm = StaticMesh { 
             mesh: Arc::new(models.remove(0).mesh),
             bvh_root: None,
@@ -170,7 +167,6 @@ impl StaticMesh {
             transform: transform,
             inv_transform: transform.inverse_transform().unwrap(),
         };
-        //sm.compute_normals();
         sm.build_bvh();
         sm
     }
@@ -245,12 +241,11 @@ impl StaticMesh {
         let c = vec3(mesh.normals[z*3], mesh.normals[z*3+1], mesh.normals[z*3+2]);
         (a,b,c)
     }
-
+    // gets tangent vector for a triangle given texture coordinates and positions of each vertex
     pub fn get_tangent(uv1: Vec2, uv2: Vec2, uv3: Vec2, p1: Vec3, p2: Vec3, p3: Vec3) -> Vec3 {
         let (u1, u2, u3) = (uv1.x, uv2.x, uv3.x);
         let (v1, v2, v3) = (uv1.y, uv2.y, uv3.y);    
         let t = ((v3-v1)*(p2-p1)-(v2-v1)*(p3-p1)) / ((u2-u1)*(v3-v1)-(v2-v1)*(u3-u1));
-        // let b = ((u3-u1)*(p2-p1)-(u2-u1)*(p3-p1))/((v2-v1)*(u3-u1)-(u2-u1)*(v3-v1));
         t
     }
 
@@ -266,53 +261,16 @@ impl StaticMesh {
             let emission = if let Some(tex) = self.textures[1].as_ref() {tex.sample(uv)} else {Vec3::zero()};
             let metallic = if let Some(tex) = self.textures[2].as_ref() {tex.sample(uv).x} else {0.0};
             let roughness = if let Some(tex) = self.textures[3].as_ref() {tex.sample(uv).x} else {1.0};
-            let mut rng = rand::thread_rng();
-
-            // // return Arc::new(Lambertian { 
-            // //     albedo: albedo,
-            // //     emission:  Vec3::zero(),
-            // // });
-
-
-            // // if not particularly metallic, use a lambertian
-            // if rng.gen_range(0.0..1.0) < metallic {
-            //     Arc::new(Metal { 
-            //         albedo: albedo,
-            //         emission: emission,
-            //         roughness: roughness,
-            //     })
-            // }
-            // else {
-            //     if rng.gen_range(0.0..1.0) < roughness {
-            //         Arc::new(Lambertian { 
-            //             albedo: albedo,
-            //             emission: emission,
-            //         })
-            //     }
-            //     else {
-            //         Arc::new(Metal { 
-            //             albedo: vec3(1.0,1.0,1.0),
-            //             emission: emission,
-            //             roughness: roughness,
-            //         })
-            //     }
-            // }
-            // // Arc::new(Lambertian { 
-            // //     albedo: vec3(metallic, roughness, 0.0),
-            // //     emission: Vec3::zero(),
-            // // })
-
             Arc::new(ParameterizedMaterial {
                 albedo: albedo,
                 emission: emission,
                 roughness: roughness,
                 metallic: metallic,
             })
-
-            
         }
     }
 
+    // adjusts normal based on transform and normal map
     fn get_adjusted_normal(&self, hit: &RayHit) -> Vec3 {
         let n = 
             if self.textures[4].is_some() {
@@ -322,10 +280,7 @@ impl StaticMesh {
                         let uv = hit.tex_coords.unwrap();
                         let normalmap_sample = self.textures[4].as_ref().unwrap().sample(uv);
                         let normalmap_vector = (2.0*normalmap_sample - vec3(1.0,1.0,1.0));
-                        // let normalmap_vector = vec3(0.0,0.0,1.0);
-                        
                         Matrix3::from_cols(tangent, bitangent, hit.normal)*normalmap_vector
-                        // bitangent
                     }
                     else {
                         hit.normal
@@ -348,6 +303,7 @@ impl Intersectable for StaticMesh {
         if let Some(root) = &self.bvh_root {
             let transformed_ray = Ray { origin: self.inv_transform.transform_point(point3(ray.origin.x, ray.origin.y, ray.origin.z)).to_vec(), direction: self.inv_transform.transform_vector(ray.direction) };
             if let Some(mut hit) = root.intersect_ray(&transformed_ray, t_min, t_max) {
+                // adjust hitpoint, normal, and material based on transform and textures
                 hit.hitpoint = self.transform.transform_point(point3(hit.hitpoint.x, hit.hitpoint.y, hit.hitpoint.z)).to_vec();
                 hit.normal = self.get_adjusted_normal(&hit);
                 hit.material = self.get_material_at_uv(hit.tex_coords);
@@ -375,7 +331,7 @@ impl Intersectable for IndexedTriangle {
     fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
         // lookup vertex data from mesh
         let (a,b,c) = StaticMesh::get_triangle_from_mesh(&self.mesh, self.idx);
-        // usual ray-triangle intersection
+        // efficient ray-triangle intersection algorithm based on 419 lectures
         const EPSILON : f32 = 0.0001;
         let e1 = b - a;
         let e2 = c - a;
@@ -390,11 +346,10 @@ impl Intersectable for IndexedTriangle {
         let v = f*ray.direction.dot(r);
         if v < 0.0 || u+v > 1.0 { return None }
         let t = f*e2.dot(r);
-        //let hitpoint = ray.origin + t*ray.direction;
         if t < t_min || t > t_max { return None }
         let (na, nb, nc) = StaticMesh::get_normals_from_mesh(&self.mesh, self.idx);
         let mesh_normal = (u*nb+v*nc+(1.0-u-v)*na).normalize();
-        let mut hit = RayHit::new(t, mesh_normal /*e1.cross(e2).normalize()*/, Arc::new(Lambertian::default()), ray);
+        let mut hit = RayHit::new(t, mesh_normal, Arc::new(Lambertian::default()), ray);
         
         // get texcoords an interpolate:
         let (tca, tcb, tcc) = StaticMesh::get_texcoords_from_mesh(&self.mesh, self.idx);
@@ -402,8 +357,8 @@ impl Intersectable for IndexedTriangle {
 
         // compute tangent and bitangent vectors. current method uses approximate per-triangle tangent and per-vertex normal to get tnb frame
         let tan_approx = StaticMesh::get_tangent(tca, tcb, tcc, a, b, c);
-        let bitangent = hit.normal.cross(tan_approx).normalize();
-        let tangent = bitangent.cross(hit.normal).normalize();
+        let bitangent = hit.normal.cross(tan_approx).normalize(); // Gram–Schmidt
+        let tangent = bitangent.cross(hit.normal).normalize();    // Gram–Schmidt  
         hit.tangent = Some(tangent);
         hit.bitangent = Some(bitangent);
 
@@ -438,7 +393,7 @@ pub struct Sphere {
 }
 impl Intersectable for Sphere {
     fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
-        // ray-sphere intersection
+        // ray-sphere intersection algorithm from 419 lectures
         let f = ray.origin - self.center;
         let a = ray.direction.magnitude2();
         let b = 2.0*f.dot(ray.direction);
@@ -474,7 +429,7 @@ pub struct Triangle {
 }
 impl Intersectable for Triangle {
     fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
-        // ray-triangle intersection
+        // efficient ray-triangle intersection algorithm based on 419 lectures
         const EPSILON : f32 = 0.0001;
         let e1 = self.b - self.a;
         let e2 = self.c - self.a;
@@ -489,7 +444,6 @@ impl Intersectable for Triangle {
         let v = f*ray.direction.dot(r);
         if v < 0.0 || u+v > 1.0 { return None }
         let t = f*e2.dot(r);
-        // let hitpoint = ray.origin + t*ray.direction;
         if t < t_min || t > t_max { return None }
 
         Some(RayHit::new(t, e1.cross(e2).normalize(), self.material.clone(), ray))
@@ -529,7 +483,6 @@ impl Intersectable for Plane {
         else {
             let t = origin_dist.abs() / d.abs();
             if t < t_min || t > t_max { return None }
-            // let hitpoint = ray.origin + t*ray.direction;
 
             Some(RayHit::new(t, n, self.material.clone(), ray))
         }
@@ -548,6 +501,7 @@ pub struct ConvexVolume {
 impl Intersectable for ConvexVolume {
     fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
         // find where ray enters and exits the volume (if at all)
+        // intersection algorith based on ray tracing the next week
         let hit_entr = self.boundary.intersect_ray(ray, f32::MIN, f32::MAX);
         if hit_entr.is_none() { return None; }
         let t_entr = hit_entr.unwrap().distance;
@@ -559,6 +513,7 @@ impl Intersectable for ConvexVolume {
         let t_start = f32::max(t_entr, t_min);
         let t_end = f32::min(t_exit, t_max);
         let dist_in_volume = t_end-t_start;
+        // use density to get distribution of distances traveled before scattering. scatter at this distance if the photon is still in the volume
         let dist_before_scatter = (-1.0/self.density) * f32::ln(rand::thread_rng().gen_range(0.0..1.0)); // not sure where this log comes from
         if dist_before_scatter < dist_in_volume {
             // ray scatters t_start + dist_before_scatter forward from its current location

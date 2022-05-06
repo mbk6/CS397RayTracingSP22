@@ -2,9 +2,6 @@
 
 #![allow(dead_code)]
 
-
-
-use std::ops::Neg;
 ////////////////////////////////////////////////////////
 /////   INCLUDES
 ////////////////////////////////////////////////////////
@@ -14,6 +11,7 @@ use rand::Rng;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::sync::Arc;
 use rayon::prelude::*;
+use std::ops::Neg;
 
 use super::geometry::*;
 use super::materials::*;
@@ -24,7 +22,6 @@ use super::materials::*;
 pub type Vec3 = Vector3<f32>;
 pub type Vec2 = Vector2<f32>;
 pub type Color = Vec3;
-type ImportanceSampler = fn(&RayHit) -> (Vec3, f32); // normal -> (sample direction, contribution)
 
 #[derive(Debug, Clone, Copy)]
 pub enum CameraProjectionMode {
@@ -40,15 +37,20 @@ pub enum ShadingMode {
 ////////////////////////////////////////////////////////
 /////   TRAITS
 ////////////////////////////////////////////////////////
+
+// Define trait for anything that can intersect a ray
 pub trait Intersectable {
     // tests for intersection with a given ray and returns hit info
     fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit>;
     // returns the axis-aligned bounding box of the intersectable, if there is one
     fn bounding_box(&self) -> Option<AABB>; // Option because not all primitives have bounding boxes (e.g. plane)
 }
+
+
 ////////////////////////////////////////////////////////
 /////   UTILITY FUNCTIONS
 ////////////////////////////////////////////////////////
+// reflect a vector about a normal
 pub fn reflect(v: &Vec3, n: &Vec3) -> Vec3 {
     v - 2.0*v.dot(*n)*n
 }
@@ -58,7 +60,7 @@ pub fn fresnel(v: &Vec3, n: &Vec3, ir: f32) -> f32 {
     let r0 = ((ir-1.0)/(ir+1.0)).powi(2);
     r0 + (1.0-r0)*(1.0-v.dot(*n).abs()).powi(5)
 }
-// Raytracing in one weekend refract function:
+// Refract function from raytracing in one weekend:
 pub fn refract(v: &Vec3, n: &Vec3, eta: f32) -> Vec3 {
     let cos_theta = f32::min((v.neg()).dot(*n), 1.0);
     let r_out_perp =  eta * (v + cos_theta*n);
@@ -85,9 +87,11 @@ pub fn rand_disk_vec() -> Vec3 {
         }
     }
 }
+// clamps a vector
 pub fn clampvec(v: Vec3, min: f32, max: f32) -> Vec3 {
     vec3(v.x.clamp(min, max), v.y.clamp(min, max), v.z.clamp(min, max))
 }
+// linear interpolation for vectors
 pub fn lerpvec(a: Vec3, b: Vec3, k: f32) -> Vec3 {
     (1.0-k)*a+k*b
 }
@@ -103,16 +107,17 @@ pub struct Ray {
 }
 #[derive(Clone)]
 pub struct RayHit {
-    pub distance: f32,
-    pub hitpoint: Vec3,
-    pub normal: Vec3,
-    pub material: Arc<dyn Material + Send + Sync>,
-    pub frontface: bool,
-    pub tex_coords: Option<Vec2>,
-    pub tangent: Option<Vec3>,
-    pub bitangent: Option<Vec3>,
+    pub distance: f32,  // from origin to hit point
+    pub hitpoint: Vec3, // location of intersection
+    pub normal: Vec3,   // normal at hit point
+    pub material: Arc<dyn Material + Send + Sync>, // material properties at hit point
+    pub frontface: bool,            // whether the ray hit the front or back of surface
+    pub tex_coords: Option<Vec2>,   // tex coords at hit point
+    pub tangent: Option<Vec3>,      // tangent vector at hit point
+    pub bitangent: Option<Vec3>,    // bitangent vector at hit point
 }
 impl RayHit {
+    // ray hit constructor
     pub fn new(distance: f32, normal: Vec3, material: Arc<dyn Material + Send + Sync>, ray: &Ray) -> RayHit {
         let frontface = normal.dot(ray.direction) < 0.0;
         RayHit { 
@@ -128,26 +133,25 @@ impl RayHit {
     }
 }
 
-
 // CAMERA
 #[derive(Debug, Clone)]
 pub struct Camera {
     // camera model based on 419 lectures
-    pub eyepoint: Vec3,
-    pub view_dir: Vec3,
-    pub up: Vec3,
+    pub eyepoint: Vec3, // 3d location of camera
+    pub view_dir: Vec3, // direction from eyepoint through center of image plane
+    pub up: Vec3,       // camera up vector
     pub projection_mode: CameraProjectionMode,
     pub shading_mode: ShadingMode,
-    pub path_depth: u32,
-    pub path_samples: u32,
-    pub screen_width: u32,
-    pub screen_height: u32,
-    pub focal_length: f32,
-    pub focus_dist: f32,
-    pub lens_radius: f32,
-    pub aa_sample_count: u32, // Must be a perfect square
-    pub max_trace_dist: f32,
-    pub gamma: f32,
+    pub path_depth: u32,        // recursion depth for rendering equation
+    pub path_samples: u32,      // number of sample rays to generate per recurive step (anything above 1 is unnecessary)
+    pub screen_width: u32,      // in pixels
+    pub screen_height: u32,     // ""
+    pub focal_length: f32,      // distance from eyepoint to image plane
+    pub focus_dist: f32,        // distance from eyepoint to plane where everything is in focus
+    pub lens_radius: f32,       // radius of approximated thin lens
+    pub aa_sample_count: u32,   // number of samples per pixel (should be perfect square)
+    pub max_trace_dist: f32,    // maximum distance from ray origin to consider intersections
+    pub gamma: f32,             // color gamma correction
 }
 impl Camera {
     // generate camera rays given pixel coordinates and sample count
@@ -175,6 +179,7 @@ impl Camera {
                 pixel_size*(0.5 + 0.5*(self.screen_height as f32) - screen_y as f32) + subpixel_offset.y,
                 -self.focal_length
             );
+            // cast ray from random location in disk to point on focus plane
             let focus_plane_pixel_center = cam_space_pixel_center.normalize()*self.focus_dist;
             let lens_origin = self.lens_radius*rand_disk_vec();
 
@@ -208,10 +213,11 @@ impl Camera {
 pub struct Scene {
     pub camera: Camera,
     pub objects: Arc<Vec<Arc<dyn Intersectable + Send + Sync>>>,
-    pub point_light_pos: Vec3,
-    pub ambient: Vec3,
+    pub point_light_pos: Vec3,  // point light only used for phong shading, which was just for debuging
+    pub ambient: Vec3,          // ambient light used for phong shading (and possibly when pathtracing stops recursing)
 }
 impl Scene {
+    // render scene to image
     pub fn render_to_image(&self) -> RgbImage {
         println!("Rendering...");
         let progress_bar = ProgressBar::new((self.camera.screen_width*self.camera.screen_height) as u64);
@@ -221,8 +227,7 @@ impl Scene {
         // iterate through pixels...
         img.as_parallel_slice_mut().into_par_iter().chunks(self.camera.screen_width as usize * 3).enumerate().for_each(|(y, mut data)| {
             for x in 0..self.camera.screen_width as usize {
-
-                // get rays, trace, and take average of outputs for AA
+                // get rays, trace rays, and take average of outputs for AA
                 let cam_rays = self.camera.generate_rays(x as u32, y as u32);
                 let mut final_color = Vec3::zero();
                 for sample_idx in 0..cam_rays.len() {
@@ -235,6 +240,7 @@ impl Scene {
                 }
                 final_color = final_color / cam_rays.len() as f32;
                 
+                // saturate colors towards white if they are excessively bright
                 let tmp = final_color.clone();
                 for i in 0..3 {
                     let d = tmp[i] - 1.0;
@@ -244,7 +250,7 @@ impl Scene {
                     }
                 }
 
-
+                // write to image
                 *(data[3*x])   = (f32::powf(final_color.x.clamp(0.0,1.0), 1.0/self.camera.gamma) * 255.9999) as u8;
                 *(data[3*x+1]) = (f32::powf(final_color.y.clamp(0.0,1.0), 1.0/self.camera.gamma) * 255.9999) as u8;
                 *(data[3*x+2]) = (f32::powf(final_color.z.clamp(0.0,1.0), 1.0/self.camera.gamma) * 255.9999) as u8;
@@ -256,15 +262,18 @@ impl Scene {
         return img;
     }
     
-    // computes same background color as raytracing in one weekend
+    // defines background color in a given direction
     fn background_color(_v: &Vec3) -> Color {
+        // used to use blue gradient from raytracing in one weekend
         // let u = v.normalize();
         // let t = 0.5*(u.y+1.0);
         // (1.0-t)*vec3(1.0, 1.0, 1.0) + t*vec3(0.5, 0.7, 1.0)
+        
+        // now just use black void:
         Vec3::zero()
     }
     
-    // computes phong shading for a given rayhit
+    // computes phong shading for a given rayhit. usually just used for debugging
     fn phong_shade_ray(&self, ray: &Ray) -> Color {
         // get hit
         match self.intersect_ray(ray, 0.0, self.camera.max_trace_dist) {
@@ -282,17 +291,15 @@ impl Scene {
                     None => 1.0,
                     Some(hit) => if hit.distance*hit.distance > (self.point_light_pos - hit.hitpoint).magnitude2() { 1.0 } else { 0.3 }
                 };
-                //shadow_weight * (self.ambient + diffuse_weight*hit.material.scatter(&hit, ray).1 + specular_weight*vec3(0.4, 0.4, 0.4))
-                // hit.material.scatter(&hit, ray).1
-                hit.normal // visualize normals for now
+                shadow_weight * (self.ambient + diffuse_weight*hit.material.scatter(&hit, ray).1 + specular_weight*vec3(0.4, 0.4, 0.4))
             }
         }
     }
     
     // computes shading for a ray hit according to the monte-carlo integrated rendering equation
-    fn shade_ray(&self, ray: &Ray, depth: u32) -> Color {
-        if depth >= self.camera.path_depth { 
-            return 0.3*Scene::background_color(&ray.direction); // ambient light model 
+    fn shade_ray(&self, ray: &Ray, recursion_depth: u32) -> Color {
+        if recursion_depth >= self.camera.path_depth { 
+            return Scene::background_color(&ray.direction); // approximates the remaining infinite recursion results
         }
         // get hit
         match self.intersect_ray(ray, 0.001, self.camera.max_trace_dist.clone()) {
@@ -304,7 +311,7 @@ impl Scene {
                     // pick new direction, generate ray, and recurse
                     let (new_ray, brdf_term, pdf) = hit.material.scatter(&hit, ray);
                     let dot_term = if hit.normal.magnitude2() > 0.0 {new_ray.direction.dot(hit.normal).abs().clamp(0.0,1.0)} else {1.0};
-                    let incoming_light = self.shade_ray(&new_ray, depth+1);
+                    let incoming_light = self.shade_ray(&new_ray, recursion_depth+1);
                     // accumulate into integral
                     integral += (dot_term*(brdf_term.mul_element_wise(incoming_light))) / pdf;
                 }
@@ -318,7 +325,7 @@ impl Scene {
 }
 impl Intersectable for Scene {
     fn intersect_ray(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
-        // for now, just iterate over all intersectables and return shortest (this will probably be a BVH or something later)
+        // iterate over all objects in the list and return the closest intersection
         let mut best_hit = None;
         for object in self.objects.iter() {
             if let Some(hit) = object.intersect_ray(ray, t_min, t_max) {
@@ -338,11 +345,9 @@ impl Intersectable for Scene {
         return best_hit;
     }
     fn bounding_box(&self) -> Option<AABB> {
-        None
+        None    // we don't really need a bounding box for the entire scene right now
     }
 }
-
-
 
 
 // runs ray tracer
@@ -358,9 +363,9 @@ pub fn run() {
             lens_radius: 0.0,   // radius of thin-lens approximation
             projection_mode: CameraProjectionMode::Perspective,
             shading_mode: ShadingMode::PathTrace,
-            screen_width: 800,
-            screen_height: 800,
-            aa_sample_count: 10000,
+            screen_width: 100,
+            screen_height: 100,
+            aa_sample_count: 100,
             path_depth: 10,     // path-tracing recursion depth
             path_samples: 1,    // sub-rays cast per recursion (slow if more than 1)
             max_trace_dist: 100.0,
@@ -369,7 +374,6 @@ pub fn run() {
         objects: Arc::new(vec![
             Arc::new(StaticMesh::load_from_file(
                 "./obj/drone.obj",
-                //"./obj/sphere.obj",
                 Some("./texture/Drone_Albedo.tga"),
                 Some("./texture/Drone_Emission.tga"),
                 Some("./texture/Drone_Metallic.tga"),
@@ -380,7 +384,6 @@ pub fn run() {
             )), 
             Arc::new(StaticMesh::load_from_file(
                 "./obj/cube.obj",
-                //"./obj/sphere.obj",
                 Some("./texture/green.png"),
                 None,
                 None,
@@ -481,49 +484,8 @@ pub fn run() {
             
             
             
-            
-            
-            // Arc::new(Sphere {
-            //     center: vec3(1.0,1.0,2.0),
-            //     radius: 1.0,
-            //     material: Arc::new(ParameterizedMaterial {
-            //         albedo: vec3(0.3,0.0,0.0),
-            //         emission: Vec3::zero(),
-            //         roughness: 0.4,
-            //         metallic: 0.3,
-            //     })
-            // }),
-            // Arc::new(Sphere {
-            //     center: vec3(-1.3,0.5,2.0),
-            //     radius: 0.5,
-            //     material: Arc::new(Dielectric { idx_of_refraction: 2.5 })
-            // }),
-            // Arc::new(Sphere {
-            //     center: vec3(-3.0,3.8,-2.0),
-            //     radius: 1.5,
-            //     material: Arc::new(Metal { albedo: vec3(1.0,1.0,0.3), roughness: 0.0, emission: Vec3::zero()})
-            // }),
-            // Arc::new(Sphere {
-            //     center: vec3(3.0,3.8,-2.0),
-            //     radius: 1.5,
-            //     material: Arc::new(Metal { albedo: vec3(1.0,1.0,1.0), roughness: 0.1, emission: Vec3::zero()})
-            // }),
-            // Arc::new(Sphere {
-            //     center: vec3(0.0,2.0,-2.5),
-            //     radius: 2.0,
-            //     material: Arc::new(Metal { albedo: vec3(0.2,0.2,0.9), roughness: 0.05, emission: Vec3::zero() })
-            // }),
-            // Arc::new(Sphere {
-            //     center: vec3(1.0,0.5,2.0),
-            //     radius: 0.5,
-            //     // material: Arc::new(Metal { albedo: vec3(0.7,0.7,0.7), roughness: 0.2, }),
-            //     material: Arc::new(Dielectric { idx_of_refraction: 1.7 })
-            // }),
-            // Arc::new(Sphere {
-            //     center: vec3(0.2,0.35,2.0),
-            //     radius: 0.35,
-            //     material: Arc::new(Lambertian { albedo: vec3(0.3,0.3,0.3), emission: vec3(0.0,1.0,1.0),}),
-            // }),
+            // VARIOUS OTHER OBJECTS
+
             Arc::new(Sphere {
                 center: vec3(-2.3,2.0,2.0),
                 radius: 0.4,
@@ -534,22 +496,6 @@ pub fn run() {
                 radius: 0.4,
                 material: Arc::new(Lambertian { albedo: vec3(0.3,0.3,0.3), emission: vec3(0.0,1.0,1.0),}),
             }),
-            // Arc::new(Sphere {
-            //     center: vec3(-0.42,0.5,2.5),
-            //     radius: 0.5,
-            //     material: Arc::new(Dielectric { idx_of_refraction: 1.5})
-            // }),
-            // Arc::new(ConvexVolume {
-            //     boundary: Arc::new(Sphere {
-            //         center: vec3(-0.42,0.5,2.5),
-            //         radius: 0.5,
-            //         material: Arc::new(Dielectric { idx_of_refraction: 1.5}) /* arbitrary */,
-            //     }),
-            //     phase_function: Arc::new(Isotropic { albedo: vec3(0.4,0.6,0.95), emission: Vec3::zero() }),
-            //     density: 10.0,
-            // }),
-
-
             Arc::new(ConvexVolume {
                 boundary: Arc::new(Sphere {
                     center: vec3(-3.0,1.0,1.0),
@@ -568,8 +514,6 @@ pub fn run() {
                 phase_function: Arc::new(Isotropic { albedo: vec3(0.0,0.0,0.0), emission: Vec3::zero() }),
                 density: 0.8,
             }),
-
-
 
             // Floor
             Arc::new(Plane {
@@ -592,11 +536,6 @@ pub fn run() {
                 c: vec3(2.5, 7.5, 3.5),
                 material: Arc::new(Lambertian { albedo: vec3(0.0,0.6,0.0), emission: vec3(7.0,7.0,7.0), ..Default::default() }),
             }),
-            // Arc::new(Plane {
-            //     point: vec3(0.0, 40.0, 0.0),
-            //     normal: -Vec3::unit_y(),
-            //     material: Arc::new(Lambertian { albedo: vec3(0.65,0.05,0.05), emission: vec3(2.0,2.0,2.0)}),
-            // }),
 
         ]),
         point_light_pos: vec3(0.0,1.0,5.0), // for phong shading only

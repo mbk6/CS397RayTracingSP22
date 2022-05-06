@@ -70,3 +70,26 @@ Michael Korenchan | Computer Science | Univesity of Illinois
 - **Week of May 2**
   - Completed normal map support
   - Completed parameterized material controlled by albedo, emission, metallic, and roughness
+
+
+## References:
+- https://i-share-uiu.primo.exlibrisgroup.com/discovery/fulldisplay?context=L&vid=01CARLI_UIU:CARLI_UIU&search_scope=MyInstitution&tab=LibraryCatalog&docid=alma99954929433905899
+- https://raytracing.github.io/books/RayTracingInOneWeekend.html
+- https://raytracing.github.io/books/RayTracingTheNextWeek.html
+- https://typhomnt.github.io/teaching/ray_tracing/pbr_intro/
+- https://computergraphics.stackexchange.com/questions/1513/how-physically-based-is-the-diffuse-and-specular-distinction
+- https://www.pbr-book.org/3ed-2018/contents specifically:
+  - https://www.pbr-book.org/3ed-2018/Materials
+  - https://www.pbr-book.org/3ed-2018/Materials/BSDFs
+  - https://www.pbr-book.org/3ed-2018/Volume_Scattering/Phase_Functions
+  - https://www.pbr-book.org/3ed-2018/Primitives_and_Intersection_Acceleration/Bounding_Volume_Hierarchies
+- https://www.reddit.com/r/GraphicsProgramming/comments/k4mtet/metalness_and_roughness_in_pbr_material/
+- https://www.chaos.com/blog/understanding-metalness
+
+## Assets:
+- Robot drone: https://sketchfab.com/3d-models/sci-fi-drone-74a5a6bcc9cf4a9f877364ab700623ba
+- Utah teapot: https://graphics.stanford.edu/courses/cs148-10-summer/as3/code/as3/teapot.obj
+- Cube: https://gist.github.com/MaikKlein/0b6d6bb58772c13593d0a0add6004c1c
+- Sphere: http://web.mit.edu/djwendel/www/weblogo/shapes/basic-shapes/sphere/sphere.obj
+- Earth map:  https://raytracing.github.io/books/RayTracingTheNextWeek.html
+- Various images and normal maps: https://images.google.com/  
