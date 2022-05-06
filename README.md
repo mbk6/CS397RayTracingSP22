@@ -93,3 +93,10 @@ Michael Korenchan | Computer Science | Univesity of Illinois
 - Sphere: http://web.mit.edu/djwendel/www/weblogo/shapes/basic-shapes/sphere/sphere.obj
 - Earth map:  https://raytracing.github.io/books/RayTracingTheNextWeek.html
 - Various images and normal maps: https://images.google.com/  
+
+<br>
+
+## Additional Results:
+ <img src = "./renders/render.png">
+ <img src = "./renders/render1.png">
+ <img src = "./renders/render2.png">
